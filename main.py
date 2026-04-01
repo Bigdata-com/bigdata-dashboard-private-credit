@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from config.paths import SCORING_AUDIT_DIR
 from src.search import RAW_OUTPUT_DIR, run_all_searches
 from src.scorer import compute_scores
 from src.reporter import generate_reports
@@ -24,13 +25,14 @@ from src.utils import console, format_elapsed
 
 
 def clear_cache() -> int:
-    """Remove all cached raw search results (.cache/raw/*.json). Returns count deleted."""
-    if not RAW_OUTPUT_DIR.exists():
-        return 0
+    """Remove raw search JSON and scoring-audit snapshots. Returns count deleted."""
     deleted = 0
-    for f in RAW_OUTPUT_DIR.glob("*.json"):
-        f.unlink()
-        deleted += 1
+    for cache_dir in (RAW_OUTPUT_DIR, SCORING_AUDIT_DIR):
+        if not cache_dir.exists():
+            continue
+        for f in cache_dir.glob("*.json"):
+            f.unlink()
+            deleted += 1
     return deleted
 
 
@@ -46,7 +48,7 @@ def main() -> None:
     parser.add_argument(
         "--clear-cache",
         action="store_true",
-        help="Delete all cached raw results in .cache/raw/ before running (forces fresh search)",
+        help="Delete .cache/raw/*.json and .cache/scoring_audit/*.json before running",
     )
     parser.add_argument(
         "--layer",
@@ -74,7 +76,9 @@ def main() -> None:
 
     if args.clear_cache:
         n = clear_cache()
-        console.print(f"\n[bold]Cache cleared:[/bold] removed {n} file(s) from .cache/raw/")
+        console.print(
+            f"\n[bold]Cache cleared:[/bold] removed {n} file(s) from .cache/raw/ + .cache/scoring_audit/"
+        )
 
     # Phase 1: Search
     if not args.skip_search:

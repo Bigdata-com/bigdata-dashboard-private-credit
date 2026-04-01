@@ -10,7 +10,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.entities import ALL_ENTITIES, EntityDict
-from config.paths import RAW_CACHE_DIR, SCORES_CSV
+from config.paths import RAW_CACHE_DIR, SCORES_CSV, SCORING_AUDIT_DIR
 from config.topics import TOPICS, TopicDict
 from src.utils import console, sanitize_filename, setup_logger
 
@@ -18,6 +18,22 @@ logger = setup_logger(__name__)
 
 RAW_OUTPUT_DIR = RAW_CACHE_DIR
 SCORES_OUTPUT = SCORES_CSV
+
+
+def document_counts_for_scoring(doc: dict[str, Any], entity_name: str) -> bool:
+    """True if this search hit is counted in heatmap/topic scores for the entity.
+
+    Matches the same rule as per-topic counts: entity name appears in headline or body
+    (case-insensitive substring).
+    """
+    text = (doc.get("headline", "") + " " + doc.get("content", "")).lower()
+    return entity_name.lower() in text
+
+
+def scoring_aligned_results(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Search hits that are counted toward the entity × topic score (and audit tab)."""
+    name = str(raw["entity_name"])
+    return [d for d in raw.get("results", []) if document_counts_for_scoring(d, name)]
 
 
 def _load_raw_result(entity: EntityDict, topic: TopicDict) -> dict[str, Any] | None:
@@ -36,13 +52,36 @@ def _count_relevant_results(raw: dict[str, Any]) -> int:
     n_results is usually saturated at the limit. Counting entity mentions in the
     returned text gives a true relevance signal that differentiates entities.
     """
-    entity_name = raw["entity_name"].lower()
-    relevant = 0
-    for doc in raw.get("results", []):
-        text = (doc.get("headline", "") + " " + doc.get("content", "")).lower()
-        if entity_name in text:
-            relevant += 1
-    return relevant
+    return len(scoring_aligned_results(raw))
+
+
+def _clear_scoring_audit_cache() -> None:
+    """Remove prior scoring-audit JSON so stale (entity, topic) files cannot linger."""
+    if not SCORING_AUDIT_DIR.exists():
+        SCORING_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+        return
+    for f in SCORING_AUDIT_DIR.glob("*.json"):
+        f.unlink()
+
+
+def _write_scoring_audit(
+    entity_slug: str,
+    topic_slug: str,
+    entity_name: str,
+    topic_name: str,
+    polarity: str,
+    aligned: list[dict[str, Any]],
+) -> None:
+    """Persist the exact rows counted for this entity × topic (source for HTML audit)."""
+    path = SCORING_AUDIT_DIR / f"{entity_slug}_{topic_slug}.json"
+    payload: dict[str, Any] = {
+        "entity_name": entity_name,
+        "topic_name": topic_name,
+        "topic_polarity": polarity,
+        "n_counted": len(aligned),
+        "results": aligned,
+    }
+    path.write_text(json.dumps(payload, indent=2, default=str))
 
 
 def _get_applicable_topics(layer: str) -> list[TopicDict]:
@@ -59,6 +98,8 @@ def compute_scores(
     target_entities = entities or ALL_ENTITIES
     rows: list[dict[str, Any]] = []
 
+    _clear_scoring_audit_cache()
+
     for entity in target_entities:
         layer = str(entity["layer"])
         applicable_topics = _get_applicable_topics(layer)
@@ -70,12 +111,27 @@ def compute_scores(
         top_positive_count = 0
         top_negative_topic = ""
         top_negative_count = 0
+        entity_slug = sanitize_filename(str(entity["name"]))
 
         for topic in applicable_topics:
             result = _load_raw_result(entity, topic)
-            count = _count_relevant_results(result) if result else 0
             topic_name = str(topic["topic_name"])
             polarity = str(topic["polarity"])
+            topic_slug = sanitize_filename(topic_name)
+
+            if result:
+                aligned = scoring_aligned_results(result)
+                count = len(aligned)
+                _write_scoring_audit(
+                    entity_slug,
+                    topic_slug,
+                    str(entity["name"]),
+                    topic_name,
+                    polarity,
+                    aligned,
+                )
+            else:
+                count = 0
 
             topic_counts[topic_name] = count
 

@@ -1,18 +1,18 @@
 # Private Credit Stress Analyzer
 
-Thematic signal search over **lenders** and **borrowers** using the [Bigdata API](https://bigdata.com). The pipeline scores each entity (terms power vs stress), then produces a ranked Excel workbook and a standalone HTML dashboard.
+Thematic signal search over lenders and borrowers using the [Bigdata API](https://bigdata.com). The pipeline scores each entity (terms power versus stress), then writes a ranked Excel workbook and a standalone HTML dashboard.
 
-**Prerequisites:** Python 3.11+ and [uv](https://github.com/astral-sh/uv).
+Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
 
-Background on the private credit workflow and participants: [docs/private_credit_business_process.md](docs/private_credit_business_process.md).
+Background on the workflow and participants: [docs/private_credit_business_process.md](docs/private_credit_business_process.md).
 
-*This project is a technical demo for research and exploration; it is not investment advice.*
+This project is a technical demo showcasing Bigdata capabilities. It is not investment advice.
 
 ## Quick start
 
 ```bash
 uv sync
-cp .env.example .env   # add BIGDATA_API_KEY
+cp .env.example .env   # set BIGDATA_API_KEY
 uv run python main.py
 ```
 
@@ -28,9 +28,9 @@ uv run python main.py --entity "Blue Owl Capital"
 uv run python main.py --max-workers 3
 ```
 
-Search results and scores are cached under **`.cache/`** (gitignored). Use `--clear-cache` when you change entities, topics, or search parameters—or remove `.cache` and run again.
+Local cache lives under `.cache/` (search JSON, scoring snapshots used by the audit tab, and `scores.csv`). Use `--clear-cache` after you change entities, topics, or search settings, or delete `.cache/` and run again. The HTML audit reads `.cache/scoring_audit/`; run scoring before generating reports if you use `src/reporter.py` alone.
 
-## Pipeline
+## Pipeline stages
 
 | Stage | Command |
 |-------|---------|
@@ -38,42 +38,30 @@ Search results and scores are cached under **`.cache/`** (gitignored). Use `--cl
 | Score | `uv run python src/scorer.py` |
 | Report | `uv run python src/reporter.py` |
 
-## Repository layout
+## Layout
 
 | Path | Purpose |
 |------|---------|
-| `dist/` | GitHub Pages assets: `index.html`, `private_credit_stress.xlsx`, `.nojekyll` — commit after a full run when publishing |
-| `.cache/` | Local scratch: `raw/*.json`, `scores.csv` — not committed |
-| `docs/` | Markdown notes (`docs/README.md` indexes them) |
-| `config/entities.py` | Lender and borrower universes |
+| `dist/` | Static site (`index.html`), Excel export, `.nojekyll` |
+| `.cache/` | Raw search results, `scoring_audit/` snapshots, `scores.csv` |
+| `docs/` | Notes; see `docs/README.md` |
+| `config/entities.py` | Lender and borrower universe |
 | `config/topics.py` | Search topics and polarity |
 
-## GitHub Pages
+## Publishing (GitHub Pages)
 
-Workflow: [`.github/workflows/pages.yml`](.github/workflows/pages.yml). In the repo, **Settings → Pages → Build and deployment → Source:** choose **GitHub Actions**.
-
-After generating output:
-
-```bash
-uv run python main.py
-git add dist/index.html dist/private_credit_stress.xlsx dist/.nojekyll
-git commit -m "Update dashboard and Excel"
-git push
-```
-
-The live URL appears under **Settings → Pages** (often `https://<user>.github.io/<repo>/`).
+The workflow is defined in [`.github/workflows/pages.yml`](.github/workflows/pages.yml). In the repository settings, set Pages to build from GitHub Actions. Adjust the workflow or branch as needed for your fork.
 
 ## Scoring
 
 ```
-terms_power_score = positive_count / (positive_count + negative_count + 1) × 100
-stress_score = 100 − terms_power_score
+terms_power_score = positive_count / (positive_count + negative_count + 1) * 100
+stress_score = 100 - terms_power_score
 ```
 
-- **Lenders** — ranked higher when `terms_power_score` is high (stronger narrative on positive themes).
-- **Borrowers** — ranked higher when `stress_score` is high (more weight on distress-oriented topics).
+Lenders rank higher when `terms_power_score` is high (more weight on positive themes). Borrowers rank higher when `stress_score` is high (more weight on distress-oriented topics).
 
-Scores are **ratios of topic mentions**, not raw news volume. The dashboard **Distress radar** uses the same per-topic counts as the heatmap but emphasizes negative (distress) themes.
+Counts are ratios of topic-aligned mentions (with entity name in the returned text), not raw article volume. The distress radar reuses the same per-topic counts as the heatmap but highlights negative themes.
 
 ## Project tree
 
@@ -87,8 +75,8 @@ Scores are **ratios of topic mentions**, not raw news volume. The dashboard **Di
 │   └── topics.py
 ├── docs/
 ├── .github/workflows/pages.yml
-├── .cache/          # created locally; gitignored
-├── dist/            # publishable site + workbook
+├── .cache/          # local only
+├── dist/
 └── src/
     ├── search.py
     ├── scorer.py
@@ -96,4 +84,4 @@ Scores are **ratios of topic mentions**, not raw news volume. The dashboard **Di
     └── utils.py
 ```
 
-If you still have old generated files under `docs/` (`raw/`, `index.html`, `scores.csv`), remove them—the pipeline uses `.cache/` and `dist/` instead. See `docs/README.md`.
+Legacy paths under `docs/` from older layouts can be removed; the current pipeline uses `.cache/` and `dist/`. Details: `docs/README.md`.

@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.entities import INCLUDE_BANKS_LAYER
-from config.paths import DIST_DIR, EXCEL_OUTPUT, HTML_INDEX, RAW_CACHE_DIR, SCORES_CSV
+from config.paths import DIST_DIR, EXCEL_OUTPUT, HTML_INDEX, SCORES_CSV, SCORING_AUDIT_DIR
 from config.topics import TOPICS
 from src.search import SEARCH_DATE_LABEL
 from src.utils import console, setup_logger
@@ -279,11 +279,14 @@ def _write_methodology_sheet(ws: Any) -> None:
 
 
 def _load_audit_docs(layer: str) -> list[dict[str, Any]]:
-    """Load raw document chunks for the audit tab, limited to 5 per (entity, topic)."""
+    """Load documents from scoring output (``.cache/scoring_audit/``).
+
+    Rows are exactly those persisted when ``compute_scores`` ran—single source of truth
+    with heatmap counts. Run the scorer before generating HTML.
+    """
     from config.entities import ALL_ENTITIES
     from src.utils import sanitize_filename
 
-    raw_dir = RAW_CACHE_DIR
     layer_entities = [e for e in ALL_ENTITIES if e["layer"] == layer]
     layer_topics = [t for t in TOPICS if layer in t["applies_to"]]
     docs: list[dict[str, Any]] = []
@@ -292,16 +295,19 @@ def _load_audit_docs(layer: str) -> list[dict[str, Any]]:
         entity_slug = sanitize_filename(str(entity["name"]))
         for topic in layer_topics:
             topic_slug = sanitize_filename(str(topic["topic_name"]))
-            path = raw_dir / f"{entity_slug}_{topic_slug}.json"
+            path = SCORING_AUDIT_DIR / f"{entity_slug}_{topic_slug}.json"
             if not path.exists():
                 continue
-            raw = json.loads(path.read_text())
-            for result in raw.get("results", [])[:5]:
+            payload = json.loads(path.read_text())
+            topic_display = str(payload.get("topic_name", topic["topic_name"])).replace("_", " ").title()
+            polarity = payload.get("topic_polarity", topic["polarity"])
+            ename = str(payload.get("entity_name", entity["name"]))
+            for result in payload.get("results", []):
                 content = result.get("content", "")
                 docs.append({
-                    "entity": entity["name"],
-                    "topic": str(topic["topic_name"]).replace("_", " ").title(),
-                    "polarity": topic["polarity"],
+                    "entity": ename,
+                    "topic": topic_display,
+                    "polarity": polarity,
                     "headline": result.get("headline", ""),
                     "snippet": content[:250] + ("..." if len(content) > 250 else ""),
                     "timestamp": (result.get("timestamp") or "")[:10],
@@ -506,15 +512,18 @@ def _build_html(
     }
     _heatmap_descriptions = {
         "lender": (
-            "Each cell = count of search results that mention the lender and the topic (entity name must appear in headline or content). "
-            "Rows = entities, columns = signal topics. These counts feed the Terms Power Score formula."
+            "Each cell = number of returned documents where the lender’s name appears in the headline or content for that topic query "
+            "(not the raw semantic-search list size). Rows = entities, columns = topics; these counts feed the Terms Power Score. "
+            "Audit lists the same rows saved under .cache/scoring_audit/ when scores were computed."
         ),
         "borrower": (
-            "Each cell = mention count for that borrower × topic. Columns include positive (revenue growth, refinancing) and negative topics (AI disruption, maturity wall, default risk, customer churn). "
-            "The stress score is the ratio of positive vs negative, not the raw sum."
+            "Each cell = number of returned documents where the borrower’s name appears in the headline or content for that topic—same rule as scoring. "
+            "Positive columns (revenue growth, refinancing, etc.) and negative columns (AI disruption, maturity wall, default risk, customer churn) "
+            "combine into the stress score as a ratio, not a raw sum. Audit reads the scoring snapshot (.cache/scoring_audit/), not raw search."
         ),
         "bank": (
-            "Each cell = mention count for that bank × topic. Net position score is the delta between positive (e.g. market share gain) and negative (credit pullback, margin call, contagion) topic counts."
+            "Each cell = number of returned documents where the bank’s name appears in the headline or content for that topic. "
+            "Net position uses the delta between positive and negative topic counts. Audit uses the same scoring snapshot files."
         ),
     }
 
