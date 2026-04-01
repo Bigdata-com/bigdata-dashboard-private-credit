@@ -1154,7 +1154,6 @@ wheels = [
 
 [[package]]
 name = "private-credit-stress"
-version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "bigdata-client" },

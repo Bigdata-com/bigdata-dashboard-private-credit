@@ -546,11 +546,11 @@ def _build_html(
         <div class="stat-card"><div class="stat-val">{lo:.1f}</div><div class="stat-label">{lo_label}</div><div class="stat-desc">{descs[3]}</div></div>
       </div>
       <div class="tabs" data-tabgroup="{layer}">
-        <div class="tab active" onclick="switchTab('{layer}','chart')">{tab1_name}</div>
-        <div class="tab" onclick="switchTab('{layer}','heatmap')">Signal Heatmap</div>
-        <div class="tab" onclick="switchTab('{layer}','themes')">Key Themes</div>
-        <div class="tab" onclick="switchTab('{layer}','audit')">Audit</div>
-        <div class="tab" onclick="switchTab('{layer}','method')">Methodology</div>
+        <div class="tab active" data-tab="chart" onclick="switchTab('{layer}','chart')">{tab1_name}</div>
+        <div class="tab" data-tab="heatmap" onclick="switchTab('{layer}','heatmap')">Signal Heatmap</div>
+        <div class="tab" data-tab="themes" onclick="switchTab('{layer}','themes')">Key Themes</div>
+        <div class="tab" data-tab="audit" onclick="switchTab('{layer}','audit')">Audit</div>
+        <div class="tab" data-tab="method" onclick="switchTab('{layer}','method')">Methodology</div>
       </div>
       <div class="tab-panel active" id="{layer}-chart">{chart_panel_html}</div>
       <div class="tab-panel" id="{layer}-heatmap"><div class="card"><h3>Signal Matrix</h3>{heatmap_block}<div class="heatmap-wrap" id="{layer}Heatmap"></div></div></div>
@@ -711,7 +711,7 @@ def _build_html(
             "    new Chart(document.getElementById('bankChart'), { type:'bar', data:{ labels:"
             + json.dumps(bank_data["labels"])
             + ", datasets:[{ label:'Net Position', data:bs, backgroundColor:bs.map(v=>v>0?'#00d4aa':'#FF6B6B'), borderRadius:4 }] }, options:{ indexAxis:'y', responsive:true, plugins:{legend:{display:false}}, scales:{ x:{grid:{color:'#21262d'}}, y:{grid:{display:false}} } } } });\n"
-            "    buildHeatmap('bankHeatmap', "
+            "    buildHeatmap('bankHeatmap', 'bank', "
             + json.dumps(bank_data["heatmap_entities"])
             + ", "
             + json.dumps(bank_data["heatmap_topics"])
@@ -793,6 +793,9 @@ canvas {{ max-height:420px; }}
 .hm th {{ background:#1a1a2e; color:#00d4aa; padding:8px 10px; text-align:center; font-weight:600; white-space:nowrap; position:sticky; top:0; z-index:1; }}
 .hm th.hm-th-neg {{ color:#FF6B6B; }}
 .hm td {{ padding:7px 10px; text-align:center; border:1px solid #21262d; }}
+.hm td.hm-cell {{ cursor:pointer; transition:filter 0.12s ease, box-shadow 0.12s ease; }}
+.hm td.hm-cell:hover {{ filter:brightness(1.12); box-shadow:inset 0 0 0 1px rgba(255,255,255,0.35); }}
+.hm td.hm-cell:focus {{ outline:2px solid #00d4aa; outline-offset:-2px; }}
 .hm tr:nth-child(even) {{ background:#0d1117; }}
 .hm tr:nth-child(odd) {{ background:#161b22; }}
 
@@ -923,16 +926,61 @@ function switchLayer(layer) {{
   if (!auditsInitialized[layer]) initAudit(layer);
 }}
 
-function switchTab(layer, tab) {{
+function switchTabTo(layer, tab) {{
   const page = document.getElementById('page-'+layer);
+  if (!page) return;
   page.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   page.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  event.target.classList.add('active');
-  document.getElementById(layer+'-'+tab).classList.add('active');
+  const tabBtn = page.querySelector('.tab[data-tab="'+tab+'"]');
+  if (tabBtn) tabBtn.classList.add('active');
+  const panel = document.getElementById(layer+'-'+tab);
+  if (panel) panel.classList.add('active');
   if (tab === 'audit' && !auditsInitialized[layer]) initAudit(layer);
 }}
 
-function buildHeatmap(id, entities, topics, data, polarities) {{
+function switchTab(layer, tab) {{
+  switchTabTo(layer, tab);
+}}
+
+function escapeHeatmapAttr(s) {{
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}}
+
+function openAuditFromHeatmap(layer, entity, topic) {{
+  switchLayer(layer);
+  const selE = document.getElementById(layer+'FEntity');
+  const selT = document.getElementById(layer+'FTopic');
+  const selP = document.getElementById(layer+'FPol');
+  if (selE) {{
+    let ok = false;
+    for (let k = 0; k < selE.options.length; k++) {{
+      if (selE.options[k].value === entity) {{ selE.selectedIndex = k; ok = true; break; }}
+    }}
+    if (!ok && entity) {{
+      const o = document.createElement('option');
+      o.value = entity; o.textContent = entity;
+      selE.appendChild(o);
+      selE.value = entity;
+    }}
+  }}
+  if (selT) {{
+    let ok = false;
+    for (let k = 0; k < selT.options.length; k++) {{
+      if (selT.options[k].value === topic) {{ selT.selectedIndex = k; ok = true; break; }}
+    }}
+    if (!ok && topic) {{
+      const o = document.createElement('option');
+      o.value = topic; o.textContent = topic;
+      selT.appendChild(o);
+      selT.value = topic;
+    }}
+  }}
+  if (selP) selP.value = '';
+  switchTabTo(layer, 'audit');
+  renderAudit(layer);
+}}
+
+function buildHeatmap(id, layer, entities, topics, data, polarities) {{
   let mx = 1;
   data.forEach(r => r.forEach(v => {{ if(v>mx) mx=v; }}));
   let h = '<table class="hm"><thead><tr><th>Entity</th>';
@@ -955,12 +1003,33 @@ function buildHeatmap(id, entities, topics, data, polarities) {{
       }} else {{
         bg = 'rgba('+Math.round(13+p*(0-13))+','+Math.round(17+p*(212-17))+','+Math.round(23+p*(170-23))+','+(0.15+p*0.85)+')';
       }}
-      h += '<td style="background:'+bg+';color:#fff;">'+v+'</td>';
+      const entA = escapeHeatmapAttr(entities[i]);
+      const topA = escapeHeatmapAttr(topics[j]);
+      h += '<td class="hm-cell" tabindex="0" role="button" title="Open audit for this entity and topic" data-layer="'+layer+'" data-entity="'+entA+'" data-topic="'+topA+'" style="background:'+bg+';color:#fff;">'+v+'</td>';
     }});
     h += '</tr>';
   }});
   h += '</tbody></table>';
-  document.getElementById(id).innerHTML = h;
+  const el = document.getElementById(id);
+  el.innerHTML = h;
+  el.onclick = function(ev) {{
+    const td = ev.target.closest('td.hm-cell');
+    if (!td) return;
+    const L = td.getAttribute('data-layer');
+    const ent = td.getAttribute('data-entity');
+    const top = td.getAttribute('data-topic');
+    if (L && ent != null && top != null) openAuditFromHeatmap(L, ent, top);
+  }};
+  el.onkeydown = function(ev) {{
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const td = ev.target.closest('td.hm-cell');
+    if (!td) return;
+    ev.preventDefault();
+    const L = td.getAttribute('data-layer');
+    const ent = td.getAttribute('data-entity');
+    const top = td.getAttribute('data-topic');
+    if (L && ent != null && top != null) openAuditFromHeatmap(L, ent, top);
+  }};
 }}
 
 function initAudit(layer) {{
@@ -984,10 +1053,14 @@ function initAudit(layer) {{
 }}
 
 function renderAudit(layer) {{
-  const docs = auditData[layer];
-  const ent = document.getElementById(layer+'FEntity').value;
-  const top = document.getElementById(layer+'FTopic').value;
-  const pol = document.getElementById(layer+'FPol').value;
+  const docs = auditData[layer] || [];
+  const entEl = document.getElementById(layer+'FEntity');
+  const topEl = document.getElementById(layer+'FTopic');
+  const polEl = document.getElementById(layer+'FPol');
+  if (!entEl || !topEl || !polEl) return;
+  const ent = entEl.value;
+  const top = topEl.value;
+  const pol = polEl.value;
 
   let filtered = docs;
   if (ent) filtered = filtered.filter(d => d.entity === ent);
@@ -1023,7 +1096,7 @@ function initCharts(layer) {{
     const lScoreWrap = lScoreCanvas && lScoreCanvas.closest('.lender-score-chart-wrap');
     if (lScoreWrap) {{ lScoreWrap.style.height = Math.max(320, lLabels.length * 28) + 'px'; }}
     new Chart(lScoreCanvas, {{ type:'bar', data:{{ labels:lLabels, datasets:[{{ label:'Terms Power Score', data:s, backgroundColor:s.map(v=>v>50?'#00d4aa':v>30?'#FFD93D':'#FF6B6B'), borderRadius:4 }}] }}, options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{{legend:{{display:false}}}}, scales:{{ x:{{min:0,max:100,grid:{{color:'#21262d'}}}}, y:{{grid:{{display:false}}, ticks:{{autoSkip:false, maxRotation:0}}}} }} }} }});
-    buildHeatmap('lenderHeatmap', {json.dumps(lender_data["heatmap_entities"])}, {json.dumps(lender_data["heatmap_topics"])}, {json.dumps(lender_data["heatmap_data"])}, {json.dumps(lender_data["heatmap_topic_polarities"])});
+    buildHeatmap('lenderHeatmap', 'lender', {json.dumps(lender_data["heatmap_entities"])}, {json.dumps(lender_data["heatmap_topics"])}, {json.dumps(lender_data["heatmap_data"])}, {json.dumps(lender_data["heatmap_topic_polarities"])});
   }}
   if (layer === 'borrower') {{
     new Chart(document.getElementById('borrowerChart'), {{ type:'radar', data:{{ labels:{borrower_radar_labels}, datasets:{borrower_radar_datasets} }}, options:{{ responsive:true, plugins:{{legend:{{position:'bottom',labels:{{boxWidth:12}}}}}}, scales:{{ r:{{beginAtZero:true, grid:{{color:'#21262d'}}, angleLines:{{color:'#21262d'}}, pointLabels:{{font:{{size:10}},color:'#c9d1d9'}}}} }} }} }});
@@ -1033,7 +1106,7 @@ function initCharts(layer) {{
     const bScoreWrap = bScoreCanvas && bScoreCanvas.closest('.borrower-score-chart-wrap');
     if (bScoreWrap) {{ bScoreWrap.style.height = Math.max(320, bLabels.length * 28) + 'px'; }}
     new Chart(bScoreCanvas, {{ type:'bar', data:{{ labels:bLabels, datasets:[{{ label:'Stress Score', data:bScores, backgroundColor:bScores.map(v=>v>=70?'#FF6B6B':v>=50?'#FFD93D':'#00d4aa'), borderRadius:4 }}] }}, options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{{legend:{{display:false}}}}, scales:{{ x:{{min:0,max:100,grid:{{color:'#21262d'}}}}, y:{{grid:{{display:false}}, ticks:{{autoSkip:false, maxRotation:0}}}} }} }} }});
-    buildHeatmap('borrowerHeatmap', {json.dumps(borrower_data["heatmap_entities"])}, {json.dumps(borrower_data["heatmap_topics"])}, {json.dumps(borrower_data["heatmap_data"])}, {json.dumps(borrower_data["heatmap_topic_polarities"])});
+    buildHeatmap('borrowerHeatmap', 'borrower', {json.dumps(borrower_data["heatmap_entities"])}, {json.dumps(borrower_data["heatmap_topics"])}, {json.dumps(borrower_data["heatmap_data"])}, {json.dumps(borrower_data["heatmap_topic_polarities"])});
   }}
 {bank_chart_block}
 }}

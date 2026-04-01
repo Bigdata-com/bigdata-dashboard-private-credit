@@ -10,6 +10,7 @@ docs/private_credit_stress.xlsx
 docs/.nojekyll
 
 .env
+log/
 .venv/
 __pycache__/
 *.py[cod]

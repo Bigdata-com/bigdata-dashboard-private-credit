@@ -1,6 +1,6 @@
 [project]
 name = "private-credit-stress"
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.11"
 
 dependencies = [
