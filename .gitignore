@@ -1,0 +1,19 @@
+# Pipeline cache (search JSON, scores)
+.cache/
+
+# Legacy cache locations (safe to delete locally)
+output/
+docs/raw/
+docs/index.html
+docs/scores.csv
+docs/private_credit_stress.xlsx
+docs/.nojekyll
+
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+.DS_Store
