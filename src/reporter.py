@@ -253,6 +253,8 @@ def _write_methodology_sheet(ws: Any) -> None:
         ["  Each entity is searched against topic-specific query texts."],
         ["  Topics have polarity: 'positive' (strength) or 'negative' (stress)."],
         ["  {company} placeholder is replaced with entity name at runtime."],
+        ["  Retrieval: each query uses a Bigdata sentiment filter aligned to that topic's polarity"],
+        ["  (positive topics favor positive-toned documents; negative topics favor negative-toned)."],
         [""],
         ["Scoring Formula:"],
         ["  terms_power_score = positive_count / (positive_count + negative_count + 1) × 100"],
@@ -264,7 +266,7 @@ def _write_methodology_sheet(ws: Any) -> None:
         ["  Banks: ranked by net_position = market_share_gain − credit_pullback"],
         [""],
         ["Limitations:"],
-        ["  Scores reflect mention frequency, not sentiment magnitude."],
+        ["  Scores are mention counts after entity-in-text filtering, not chunk sentiment scores."],
         ["  Results depend on Bigdata index coverage and recency."],
     ]
     for row in methodology_text:
@@ -599,7 +601,7 @@ def _build_html(
         "terms_power_score = positive / (positive + negative + 1) &times; 100",
         "High score = strong lender position. Low score = elevated stress signals relative to strength.",
         [
-            ("Topic Search", "Each lender is searched against every signal topic using Bigdata semantic search.", "Example: \"Blackstone\" &times; \"redemption pressure\" &rarr; thematic document retrieval", ""),
+            ("Topic Search", "Each lender is searched against every signal topic using Bigdata semantic search. A sentiment filter matches each topic's polarity—positive topics retrieve predominantly positive-toned documents; stress topics retrieve predominantly negative-toned documents (same idea as API sentiment filters).", "Example: \"Blackstone\" &times; \"redemption pressure\" &rarr; thematic document retrieval with negative sentiment alignment", ""),
             ("Entity Filtering", "Results are filtered to only include documents where the entity name appears in headline or content.", "Ensures the returned text gives a true relevance signal that differentiates entities", ""),
             ("Polarity Aggregation", "Mention counts are split by polarity (positive / negative) and summed per entity.", "", ""),
             ("Scoring &amp; Ranking", "Terms Power Score is computed and lenders are ranked descending. Radar chart shows negative-topic signal intensity.", "", ""),
@@ -615,7 +617,7 @@ def _build_html(
         "stress_score = 100 &minus; terms_power_score",
         "High stress = more distress signal relative to resilience. Low stress = borrower showing strength signals.",
         [
-            ("Topic Search", "Each borrower is searched against every signal topic using Bigdata semantic search.", "Example: \"Cision\" &times; \"AI disruption risk\" &rarr; thematic document retrieval", ""),
+            ("Topic Search", "Each borrower is searched against every signal topic using Bigdata semantic search. A sentiment filter matches each topic's polarity—resilience topics favor positive-toned documents; distress topics favor negative-toned documents (same idea as API sentiment filters).", "Example: \"Cision\" &times; \"AI disruption risk\" &rarr; thematic document retrieval with negative sentiment alignment", ""),
             ("Entity Filtering", "Results are filtered to only include documents that explicitly mention the borrower.", "Filters out content that doesn't explicitly link companies to risk factors", ""),
             ("Polarity Aggregation", "Mention counts are split by polarity and summed. Radar chart uses only negative topics.", "", ""),
             ("Scoring &amp; Ranking", "Stress score is computed and borrowers are ranked descending. High score = most distressed.", "", ""),
@@ -631,7 +633,7 @@ def _build_html(
         "net_position = market_share_gain &minus; credit_pullback",
         "Positive = bank gaining share or conservative. Negative = pulling back or contagion risk.",
         [
-            ("Topic Search", "Each bank is searched against back-leverage, contagion, and market share topics.", "Searches across multiple document types with configurable date ranges", ""),
+            ("Topic Search", "Each bank is searched against back-leverage, contagion, and market share topics using Bigdata semantic search, with sentiment aligned to each topic's polarity (positive vs negative).", "Searches across multiple document types with configurable date ranges", ""),
             ("Entity Filtering", "Results are filtered to only include documents mentioning the bank in headline or content.", "", ""),
             ("Net Position", "Net position = delta between positive and negative topic mentions.", "", ""),
             ("Ranking", "Banks ranked by net position (descending). Positive = gaining share.", "", ""),
