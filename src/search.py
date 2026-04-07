@@ -13,7 +13,7 @@ from rich.table import Table
 
 from bigdata_client import Bigdata
 from bigdata_client.daterange import AbsoluteDateRange
-from bigdata_client.query import Similarity
+from bigdata_client.query import SentimentRange, Similarity
 from bigdata_research_tools.search.search import run_search
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -72,6 +72,17 @@ def _result_path(entity: EntityDict, topic: TopicDict) -> Path:
     return RAW_OUTPUT_DIR / f"{entity_slug}_{topic_slug}.json"
 
 
+def _sentiment_filter_for_topic_polarity(polarity: str) -> SentimentRange | None:
+    """Map topic polarity to the SDK sentiment expression (aligned with REST filters.sentiment)."""
+    p = str(polarity).strip().lower()
+    if p == "positive":
+        # Strictly above neutral to mirror categorical "positive" filter
+        return SentimentRange((1e-6, 1.0))
+    if p == "negative":
+        return SentimentRange((-1.0, -1e-6))
+    return None
+
+
 def _reformulate_queries(query_text: str, entity_name: str) -> list[str]:
     """Build multiple query variants for reformulation to improve recall.
 
@@ -105,7 +116,11 @@ def _run_single_search(
     start_ms = time.time() * 1000
 
     # Run all query variants in one batch (same date range); merge and dedupe by content hash
-    queries = [Similarity(q) for q in query_variants]
+    sentiment_q = _sentiment_filter_for_topic_polarity(str(topic["polarity"]))
+    queries = [
+        (Similarity(q) & sentiment_q) if sentiment_q is not None else Similarity(q)
+        for q in query_variants
+    ]
     search_results = run_search(
         queries,
         date_ranges=AbsoluteDateRange(SEARCH_START_DATE, SEARCH_END_DATE),
