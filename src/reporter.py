@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import sys
 from pathlib import Path
@@ -21,6 +22,8 @@ from src.utils import console, setup_logger
 
 logger = setup_logger(__name__)
 
+TOPIC_BY_NAME: dict[str, dict[str, str | list[str]]] = {str(t["topic_name"]): t for t in TOPICS}
+
 HEADER_FILL = PatternFill(start_color="E8E8E8", end_color="E8E8E8", fill_type="solid")
 HEADER_FONT = Font(bold=True, color="000000", size=11)
 BODY_FONT = Font(color="000000", size=10)
@@ -28,8 +31,16 @@ BODY_FILL = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="sol
 
 
 def _topic_display_name(topic_key: str) -> str:
-    """Human-readable topic name for Excel headers (e.g. lender_spread_power -> Lender Spread Power)."""
+    """Human-readable topic name for Excel headers (matches dashboard short_label when set)."""
+    meta = TOPIC_BY_NAME.get(topic_key)
+    if meta and meta.get("short_label"):
+        return str(meta["short_label"])
     return topic_key.replace("_", " ").title()
+
+
+def _build_topic_description(topic_row: dict[str, str | list[str]]) -> str:
+    """Layman description for theme card inline text."""
+    return str(topic_row["layman_description"])
 
 
 def _layer_display_name(layer: str) -> str:
@@ -301,7 +312,7 @@ def _load_audit_docs(layer: str) -> list[dict[str, Any]]:
             if not path.exists():
                 continue
             payload = json.loads(path.read_text())
-            topic_display = str(payload.get("topic_name", topic["topic_name"])).replace("_", " ").title()
+            topic_display = str(topic.get("short_label", topic["topic_name"])).strip()
             polarity = payload.get("topic_polarity", topic["polarity"])
             ename = str(payload.get("entity_name", entity["name"]))
             for result in payload.get("results", []):
@@ -325,7 +336,14 @@ def _prepare_layer_data(
     """Prepare all chart/heatmap/theme data for a single layer."""
     layer_df = df[df["layer"] == layer].copy()
     layer_topics = [t for t in TOPICS if layer in t["applies_to"]]
-    topic_names = [str(t["topic_name"]) for t in layer_topics]
+    topic_order_index = {str(t["topic_name"]): i for i, t in enumerate(TOPICS)}
+    layer_topics_sorted = sorted(
+        layer_topics,
+        key=lambda t: (
+            0 if str(t["polarity"]) == "positive" else 1,
+            topic_order_index[str(t["topic_name"])],
+        ),
+    )
 
     if layer == "lender":
         score_col = "terms_power_score"
@@ -344,7 +362,8 @@ def _prepare_layer_data(
     scores = layer_df[score_col].tolist()
 
     heatmap_rows: list[list[int]] = []
-    available_topics = [t for t in topic_names if t in layer_df.columns]
+    topic_names_sorted = [str(t["topic_name"]) for t in layer_topics_sorted]
+    available_topics = [t for t in topic_names_sorted if t in layer_df.columns]
     polarity_by_topic = {str(t["topic_name"]): str(t["polarity"]) for t in layer_topics}
     heatmap_topic_polarities = [polarity_by_topic[t] for t in available_topics]
     for _, row in layer_df.iterrows():
@@ -355,16 +374,21 @@ def _prepare_layer_data(
         ])
 
     theme_topics: list[dict[str, Any]] = []
-    for topic in layer_topics:
+    for topic in layer_topics_sorted:
         tname = str(topic["topic_name"])
         total = int(layer_df[tname].fillna(0).sum()) if tname in layer_df.columns else 0
         theme_topics.append({
-            "name": tname.replace("_", " ").title(),
+            "short_label": str(topic["short_label"]),
+            "description": _build_topic_description(topic),
             "polarity": topic["polarity"],
             "query": str(topic["topic_text"]),
             "count": total,
         })
-    theme_topics.sort(key=lambda x: x["count"], reverse=True)
+    positive_themes = [x for x in theme_topics if x["polarity"] == "positive"]
+    negative_themes = [x for x in theme_topics if x["polarity"] == "negative"]
+    positive_themes.sort(key=lambda x: x["count"], reverse=True)
+    negative_themes.sort(key=lambda x: x["count"], reverse=True)
+    theme_topics = positive_themes + negative_themes
 
     audit_docs = _load_audit_docs(layer)
 
@@ -373,13 +397,13 @@ def _prepare_layer_data(
         "scores": scores,
         "score_col": score_col,
         "heatmap_entities": labels,
-        "heatmap_topics": [t.replace("_", " ").title() for t in available_topics],
+        "heatmap_topics": [str(TOPIC_BY_NAME[t]["short_label"]) for t in available_topics],
         "heatmap_topic_polarities": heatmap_topic_polarities,
         "heatmap_data": heatmap_rows,
         "theme_topics": theme_topics,
         "audit_docs": audit_docs,
         "entity_count": len(labels),
-        "topic_count": len(layer_topics),
+        "topic_count": len(layer_topics_sorted),
     }
 
     # Radar: build from negative topics so radar and heatmap share the same raw counts
@@ -387,14 +411,14 @@ def _prepare_layer_data(
         radar_colors = ["#FF6B6B", "#FFD93D", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7"]
         negative_topics = [
             str(t["topic_name"])
-            for t in layer_topics
+            for t in layer_topics_sorted
             if t["polarity"] == "negative" and str(t["topic_name"]) in available_topics
         ]
         radar_datasets = []
         for i, topic in enumerate(negative_topics):
             idx = available_topics.index(topic)
             radar_datasets.append({
-                "label": topic.replace("_", " ").title(),
+                "label": str(TOPIC_BY_NAME[topic]["short_label"]),
                 "data": [heatmap_rows[row_idx][idx] for row_idx in range(len(heatmap_rows))],
                 "borderColor": radar_colors[i % len(radar_colors)],
                 "backgroundColor": radar_colors[i % len(radar_colors)] + "33",
@@ -435,20 +459,23 @@ def generate_html_dashboard(df: pd.DataFrame) -> Path:
 
 
 def _themes_html(topics: list[dict[str, Any]]) -> str:
-    """Build the Key Themes section with polarity, count, and query template."""
+    """Build the Key Themes section with polarity, count, and inline description."""
     items = ""
     for t in topics:
         pol_class = "positive" if t["polarity"] == "positive" else "negative"
         pol_icon = "+" if t["polarity"] == "positive" else "&minus;"
-        query_escaped = t["query"].replace("{company}", "<em>{company}</em>")
+        query_escaped = str(t["query"]).replace("{company}", "<em>{company}</em>")
+        label = html.escape(str(t["short_label"]))
+        desc = html.escape(str(t["description"]), quote=False)
         items += (
             f'<div class="theme-card {pol_class}">'
             f'<div class="theme-header">'
-            f'<span class="theme-name">{t["name"]}</span>'
+            f'<span class="theme-name">{label} '
+            f'<span class="theme-desc">({desc})</span></span>'
             f'<span class="pol-badge {pol_class[:3]}">{pol_icon} {t["polarity"].title()}</span>'
             f'<span class="theme-count">{t["count"]}</span>'
             f'</div>'
-            f'<div class="theme-query">{query_escaped}</div>'
+            f'<div class="theme-query"><span class="theme-query-label">Search Query:</span> {query_escaped}</div>'
             f'</div>'
         )
     return items
@@ -529,6 +556,104 @@ def _build_html(
         ),
     }
 
+    lender_tab_intros: dict[str, str] = {
+        "layer": (
+            "Who’s showing lender-strength narratives versus stress (redemptions, markdowns, waivers) in recent news and filings."
+        ),
+        "chart": (
+            "The radar plots intensity on stress topics only; the horizontal bars are Terms Power Score—higher means more "
+            "strength-themed mentions relative to stress for that lender."
+        ),
+        "heatmap": (
+            "Each cell counts snippets that matched the theme query and mention the lender in headline or body. "
+            "Teal-headed columns are strength; coral-headed columns are stress—the same counts roll up into the score."
+        ),
+        "themes": (
+            "Every theme is a fixed semantic search. Strength topics are listed first, then stress (green block above red). "
+            "Each card shows its definition and scoring direction in parentheses."
+        ),
+        "audit": (
+            "Supporting headlines and excerpts from the scoring run. Filter by entity or theme to verify what drove a cell."
+        ),
+        "method": (
+            "End-to-end methodology: search, entity filter, polarity aggregation, and the Terms Power formula for this layer."
+        ),
+    }
+    borrower_tab_intros: dict[str, str] = {
+        "layer": (
+            "Which PE-backed names skew toward resilience stories versus distress (maturity wall, default risk, churn, AI headwinds)."
+        ),
+        "chart": (
+            "The radar highlights distress-topic volume by borrower; the stress bars combine positive and negative themes—higher means more distress signal."
+        ),
+        "heatmap": (
+            "Per-borrower, per-theme mention counts after the entity must appear in the returned text. Resilience columns first, then distress."
+        ),
+        "themes": (
+            "Queries used for borrowers: resilience themes on top, distress below. Each card shows its definition and scoring direction."
+        ),
+        "audit": (
+            "Documents that passed the same filters used in scoring—use this tab to sanity-check a heatmap cell."
+        ),
+        "method": (
+            "How borrower stress_score is built from positive versus negative theme counts and Bigdata retrieval settings."
+        ),
+    }
+    bank_tab_intros: dict[str, str] = {
+        "layer": (
+            "Banks as the back-leverage layer: net position contrasts constructive share-gain narratives against pullback and contagion mentions."
+        ),
+        "chart": (
+            "Horizontal bars show net position (positive-topic mentions minus pullback-style mentions)—compare banks side by side."
+        ),
+        "heatmap": (
+            "Raw mention counts per bank and theme; positive themes first, then stress. Feeds the same net position idea as the bar chart."
+        ),
+        "themes": (
+            "Themes specific to bank/private-credit linkage. Green block first, red below. Each card shows its definition."
+        ),
+        "audit": (
+            "Source rows for bank × theme counts; filter to trace a headline behind a heatmap value."
+        ),
+        "method": (
+            "Methodology for bank-layer searches and net position scoring."
+        ),
+    }
+
+    _cov = (
+        f"Search date filter: <strong>{SEARCH_DATE_LABEL}</strong>. Sources: news, filings, transcripts indexed by "
+        f"<a href='https://bigdata.com' target='_blank' rel='noopener' style='color:#4CA7F9;text-decoration:none;'>Bigdata.com</a>."
+    )
+
+    overview_inner = f"""
+    <div class="overview-hero">
+      <h2>What it does (in one minute)</h2>
+      <p class="overview-lead">The analyzer is a thematic research demo built on <a href="https://bigdata.com" target="_blank" rel="noopener">Bigdata.com</a>. It:</p>
+      <ul class="overview-list">
+        <li>Searches news and documents for a fixed list of lenders and borrowers, using predefined topics (themes like spread power, redemption pressure, maturity wall risk).</li>
+        <li>Scores each organization by comparing how many on-topic, entity-relevant mentions fall into positive themes versus negative themes.</li>
+        <li>Produces a standalone HTML dashboard so you can compare entities side by side and drill into supporting snippets.</li>
+      </ul>
+      <p class="overview-important"><strong>Important:</strong> This is a technical showcase, not investment advice, a credit rating, or a trading signal. Results depend on configured entities, topics, date range, and how content is tagged and retrieved in Bigdata.</p>
+    </div>
+    <div class="overview-card">
+      <h3>How to read scores</h3>
+      <p>Counts are on-topic snippets where the entity name appears in the returned text—not raw unfiltered search volume.</p>
+      <p><code>terms_power_score = positive_count / (positive_count + negative_count + 1) × 100</code></p>
+      <p><code>stress_score = 100 − terms_power_score</code></p>
+      <p><strong>Lenders</strong> are ranked by terms power (higher = more strength-themed mentions relative to stress). <strong>Borrowers</strong> use stress score (higher = more distress weight). <strong>Banks</strong> use net position (positive-theme mentions minus pullback-style mentions) when that layer is enabled.</p>
+    </div>
+    <p class="overview-footer">{_cov}</p>
+    """
+
+    overview_page = f"""
+    <div class="layer-page active" id="page-overview">
+      <div class="overview-wrap">{overview_inner}</div>
+    </div>"""
+
+    def _tab_intro_line(text: str) -> str:
+        return f'<p class="tab-intro">{text}</p>' if text else ""
+
     def _layer_page(
         layer: str,
         data: dict[str, Any],
@@ -537,6 +662,9 @@ def _build_html(
         method_html: str,
         chart_panel_html: str | None = None,
         heatmap_desc: str = "",
+        *,
+        tab_intros: dict[str, str],
+        page_active_class: str = "",
     ) -> str:
         scores = data["scores"]
         hi = max(scores) if scores else 0
@@ -544,12 +672,17 @@ def _build_html(
         hi_label = "Highest Score" if layer == "lender" else "Highest Stress" if layer == "borrower" else "Highest Net Pos."
         lo_label = "Lowest Score" if layer == "lender" else "Lowest Stress" if layer == "borrower" else "Lowest Net Pos."
         descs = _stat_descriptions[layer]
-        active = ' active' if layer == 'borrower' else ''
+        active = page_active_class
         if chart_panel_html is None:
             chart_panel_html = f'<div class="card"><h3>{chart_label}</h3><p class="card-desc">{_chart_descriptions.get(layer, "")}</p><canvas id="{layer}Chart"></canvas></div>'
         heatmap_block = f'<p class="card-desc">{heatmap_desc}</p>' if heatmap_desc else ''
+        ti = tab_intros
+        layer_blurb = (
+            f'<p class="layer-blurb">{ti["layer"]}</p>' if ti.get("layer") else ""
+        )
         return f"""
     <div class="layer-page{active}" id="page-{layer}">
+      {layer_blurb}
       <div class="stats">
         <div class="stat-card"><div class="stat-val">{data["entity_count"]}</div><div class="stat-label">Entities Tracked</div><div class="stat-desc">{descs[0]}</div></div>
         <div class="stat-card"><div class="stat-val">{data["topic_count"]}</div><div class="stat-label">Signal Topics</div><div class="stat-desc">{descs[1]}</div></div>
@@ -563,14 +696,12 @@ def _build_html(
         <div class="tab" data-tab="audit" onclick="switchTab('{layer}','audit')">Audit</div>
         <div class="tab" data-tab="method" onclick="switchTab('{layer}','method')">Methodology</div>
       </div>
-      <div class="tab-panel active" id="{layer}-chart">{chart_panel_html}</div>
-      <div class="tab-panel" id="{layer}-heatmap"><div class="card"><h3>Signal Matrix</h3>{heatmap_block}<div class="heatmap-wrap" id="{layer}Heatmap"></div></div></div>
-      <div class="tab-panel" id="{layer}-themes"><div class="card"><h3>Signal Topics &amp; Queries</h3><div class="themes-list">{_themes_html(data["theme_topics"])}</div></div></div>
-      <div class="tab-panel" id="{layer}-audit"><div class="card"><h3>Document Audit</h3><div class="audit-filters" id="{layer}AuditFilters"></div><div class="audit-count" id="{layer}AuditCount"></div><div class="audit-table-wrap" id="{layer}AuditTable"></div></div></div>
-      <div class="tab-panel" id="{layer}-method"><div class="method-block">{method_html}</div></div>
+      <div class="tab-panel active" id="{layer}-chart">{_tab_intro_line(ti.get("chart", ""))}{chart_panel_html}</div>
+      <div class="tab-panel" id="{layer}-heatmap">{_tab_intro_line(ti.get("heatmap", ""))}<div class="card"><h3>Signal Matrix</h3>{heatmap_block}<div class="heatmap-wrap" id="{layer}Heatmap"></div></div></div>
+      <div class="tab-panel" id="{layer}-themes">{_tab_intro_line(ti.get("themes", ""))}<div class="card"><h3>Signal Topics &amp; Queries</h3><div class="themes-list">{_themes_html(data["theme_topics"])}</div></div></div>
+      <div class="tab-panel" id="{layer}-audit">{_tab_intro_line(ti.get("audit", ""))}<div class="card"><h3>Document Audit</h3><div class="audit-filters" id="{layer}AuditFilters"></div><div class="audit-count" id="{layer}AuditCount"></div><div class="audit-table-wrap" id="{layer}AuditTable"></div></div></div>
+      <div class="tab-panel" id="{layer}-method">{_tab_intro_line(ti.get("method", ""))}<div class="method-block">{method_html}</div></div>
     </div>"""
-
-    _cov = f"Search date filter: <strong>{SEARCH_DATE_LABEL}</strong>. Sources: news, filings, transcripts indexed by <a href='https://bigdata.com' target='_blank' style='color:#4CA7F9;text-decoration:none;'>Bigdata.com</a>."
 
     def _method_page(title: str, subtitle: str, why: str, what: str, formula_code: str, formula_desc: str, steps: list[tuple[str, str, str, str]], coverage: str) -> str:
         steps_html = ""
@@ -657,6 +788,8 @@ def _build_html(
         lender_method,
         chart_panel_html=lender_chart_panel,
         heatmap_desc=_heatmap_descriptions["lender"],
+        tab_intros=lender_tab_intros,
+        page_active_class="",
     )
     borrower_chart_panel = (
         '<div class="card"><h3>Distress radar</h3><p class="card-desc">'
@@ -674,6 +807,8 @@ def _build_html(
         borrower_method,
         chart_panel_html=borrower_chart_panel,
         heatmap_desc=_heatmap_descriptions["borrower"],
+        tab_intros=borrower_tab_intros,
+        page_active_class="",
     )
 
     le_ct = lender_data["entity_count"]
@@ -688,6 +823,8 @@ def _build_html(
             "Contagion Score",
             bank_method,
             heatmap_desc=_heatmap_descriptions["bank"],
+            tab_intros=bank_tab_intros,
+            page_active_class="",
         )
         bank_nav_html = """
     <div class="nav-item" data-layer="bank" onclick="switchLayer('bank')">
@@ -695,13 +832,13 @@ def _build_html(
       Banks
     </div>"""
         page_titles_js = (
-            "{ lender:'Lender Terms Power Analysis', borrower:'Borrower Distress Analysis', "
-            "bank:'Bank Contagion Analysis' }"
+            "{ overview:'Private Credit Stress Analyzer', lender:'Lender Terms Power Analysis', "
+            "borrower:'Borrower Distress Analysis', bank:'Bank Contagion Analysis' }"
         )
         ba_ct = bank_data["entity_count"]
         ba_tp = bank_data["topic_count"]
         page_badges_js = (
-            f"{{ lender:'{le_ct} entities &middot; {le_tp} topics', "
+            f"{{ overview:'Overview &middot; thematic demo', lender:'{le_ct} entities &middot; {le_tp} topics', "
             f"borrower:'{bo_ct} entities &middot; {bo_tp} topics', "
             f"bank:'{ba_ct} entities &middot; {ba_tp} topics' }}"
         )
@@ -737,10 +874,11 @@ def _build_html(
         bank_page_html = ""
         bank_nav_html = ""
         page_titles_js = (
-            "{ lender:'Lender Terms Power Analysis', borrower:'Borrower Distress Analysis' }"
+            "{ overview:'Private Credit Stress Analyzer', lender:'Lender Terms Power Analysis', "
+            "borrower:'Borrower Distress Analysis' }"
         )
         page_badges_js = (
-            f"{{ lender:'{le_ct} entities &middot; {le_tp} topics', "
+            f"{{ overview:'Overview &middot; thematic demo', lender:'{le_ct} entities &middot; {le_tp} topics', "
             f"borrower:'{bo_ct} entities &middot; {bo_tp} topics' }}"
         )
         audit_data_js = (
@@ -801,7 +939,7 @@ canvas {{ max-height:420px; }}
 
 .heatmap-wrap {{ overflow-x:auto; }}
 .hm {{ border-collapse:collapse; width:100%; font-size:0.75rem; }}
-.hm th {{ background:#1a1a2e; color:#00d4aa; padding:8px 10px; text-align:center; font-weight:600; white-space:nowrap; position:sticky; top:0; z-index:1; }}
+.hm th {{ background:#1a1a2e; color:#00d4aa; padding:8px 10px; text-align:center; font-weight:600; white-space:nowrap; position:sticky; top:0; z-index:1; vertical-align:bottom; }}
 .hm th.hm-th-neg {{ color:#FF6B6B; }}
 .hm td {{ padding:7px 10px; text-align:center; border:1px solid #21262d; }}
 .hm td.hm-cell {{ cursor:pointer; transition:filter 0.12s ease, box-shadow 0.12s ease; }}
@@ -815,11 +953,12 @@ canvas {{ max-height:420px; }}
 .theme-card.positive {{ background:rgba(0,212,170,0.06); border-left:3px solid #00d4aa; }}
 .theme-card.negative {{ background:rgba(255,107,107,0.06); border-left:3px solid #FF6B6B; }}
 .theme-header {{ display:flex; align-items:center; gap:0.6rem; }}
-.theme-name {{ font-size:0.85rem; font-weight:600; color:#c9d1d9; flex:1; }}
+.theme-name {{ font-size:0.85rem; font-weight:600; color:#c9d1d9; flex:1; display:flex; align-items:center; gap:0.35rem; flex-wrap:wrap; min-width:0; }}
 .theme-count {{ font-weight:700; font-size:1rem; min-width:2.5rem; text-align:right; }}
 .theme-card.positive .theme-count {{ color:#00d4aa; }}
 .theme-card.negative .theme-count {{ color:#FF6B6B; }}
 .theme-query {{ font-size:0.75rem; color:#8b949e; font-style:italic; margin-top:0.35rem; padding-left:0.1rem; }}
+.theme-query-label {{ font-style:normal; font-weight:600; color:#c9d1d9; }}
 .theme-query em {{ color:#c9d1d9; font-style:normal; font-weight:600; }}
 .pol-badge {{ font-size:0.65rem; padding:0.1rem 0.45rem; border-radius:99px; font-weight:600; white-space:nowrap; }}
 .pol-badge.pos {{ background:rgba(0,212,170,0.15); color:#00d4aa; }}
@@ -877,6 +1016,26 @@ canvas {{ max-height:420px; }}
 
 .card-desc {{ font-size:0.78rem; color:#8b949e; margin-bottom:0.75rem; }}
 
+.overview-wrap {{ max-width:720px; }}
+.overview-hero h2 {{ color:#fff; font-size:1.25rem; margin-bottom:0.75rem; font-weight:700; }}
+.overview-lead {{ color:#c9d1d9; font-size:0.88rem; line-height:1.6; margin-bottom:0.5rem; }}
+.overview-lead a {{ color:#4CA7F9; text-decoration:none; }}
+.overview-lead a:hover {{ text-decoration:underline; }}
+.overview-list {{ margin:0.5rem 0 1rem 1.1rem; color:#8b949e; font-size:0.85rem; line-height:1.65; }}
+.overview-list li {{ margin-bottom:0.35rem; }}
+.overview-important {{ color:#c9d1d9; font-size:0.84rem; line-height:1.6; margin-bottom:1.25rem; padding:0.85rem 1rem; background:rgba(255,217,61,0.08); border-left:3px solid #FFD93D; border-radius:4px; }}
+.overview-card {{ background:#161b22; border:1px solid #30363d; border-radius:8px; padding:1.25rem 1.4rem; margin-bottom:1rem; }}
+.overview-card h3 {{ color:#00d4aa; font-size:0.95rem; margin-bottom:0.65rem; font-weight:600; }}
+.overview-card p {{ color:#8b949e; font-size:0.82rem; line-height:1.6; margin-bottom:0.5rem; }}
+.overview-card code {{ display:block; background:#0d1117; padding:0.45rem 0.6rem; border-radius:6px; color:#00d4aa; font-size:0.78rem; margin:0.35rem 0; }}
+.overview-footer {{ font-size:0.78rem; color:#484f58; line-height:1.5; margin-top:0.5rem; }}
+
+.tab-intro {{ font-size:0.8rem; color:#8b949e; line-height:1.55; margin:0 0 1rem 0; max-width:900px; }}
+.layer-blurb {{ font-size:0.82rem; color:#c9d1d9; line-height:1.55; margin:0 0 1rem 0; max-width:880px; }}
+
+.theme-desc {{ font-weight:400; font-size:0.75rem; color:#8b949e; }}
+
+
 .layer-page {{ display:none; }}
 .layer-page.active {{ display:block; }}
 </style>
@@ -890,7 +1049,11 @@ canvas {{ max-height:420px; }}
   </div>
   <div class="sidebar-section">
     <div class="sidebar-section-label">Analysis Layers</div>
-    <div class="nav-item active" data-layer="borrower" onclick="switchLayer('borrower')">
+    <div class="nav-item active" data-layer="overview" onclick="switchLayer('overview')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      Overview
+    </div>
+    <div class="nav-item" data-layer="borrower" onclick="switchLayer('borrower')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
       Borrowers
     </div>
@@ -904,10 +1067,11 @@ canvas {{ max-height:420px; }}
 
 <div class="main">
   <div class="topbar">
-    <h1 id="pageTitle">Borrower Distress Analysis</h1>
-    <span class="badge" id="pageBadge">{borrower_data["entity_count"]} entities &middot; {borrower_data["topic_count"]} topics</span>
+    <h1 id="pageTitle">Private Credit Stress Analyzer</h1>
+    <span class="badge" id="pageBadge">Overview &middot; thematic demo</span>
   </div>
   <div class="content">
+    {overview_page}
     {lender_page}
     {borrower_page}
     {bank_page_html}
@@ -933,8 +1097,10 @@ function switchLayer(layer) {{
   document.getElementById('page-'+layer).classList.add('active');
   document.getElementById('pageTitle').textContent = pageTitles[layer];
   document.getElementById('pageBadge').innerHTML = pageBadges[layer];
-  if (!chartsInitialized[layer]) initCharts(layer);
-  if (!auditsInitialized[layer]) initAudit(layer);
+  if (layer !== 'overview') {{
+    if (!chartsInitialized[layer]) initCharts(layer);
+    if (!auditsInitialized[layer]) initAudit(layer);
+  }}
 }}
 
 function switchTabTo(layer, tab) {{
@@ -955,6 +1121,14 @@ function switchTab(layer, tab) {{
 
 function escapeHeatmapAttr(s) {{
   return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}}
+
+function escapeHtml(s) {{
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
 }}
 
 function openAuditFromHeatmap(layer, entity, topic) {{
@@ -997,7 +1171,7 @@ function buildHeatmap(id, layer, entities, topics, data, polarities) {{
   let h = '<table class="hm"><thead><tr><th>Entity</th>';
   topics.forEach((t, j) => {{
     const neg = polarities && polarities[j] === 'negative';
-    h += '<th'+(neg ? ' class="hm-th-neg"' : '')+'>'+t+'</th>';
+    h += '<th'+(neg ? ' class="hm-th-neg"' : '')+'>'+escapeHtml(t)+'</th>';
   }});
   h += '</tr></thead><tbody>';
   data.forEach((row,i) => {{
@@ -1122,8 +1296,6 @@ function initCharts(layer) {{
 {bank_chart_block}
 }}
 
-initCharts('borrower');
-initAudit('borrower');
 </script>
 </body>
 </html>"""
