@@ -122,19 +122,37 @@ canvas { max-height:420px; }
 
 .card-desc { font-size:0.78rem; color:#8b949e; margin-bottom:0.75rem; }
 
-.overview-wrap { max-width:720px; }
+.overview-wrap { max-width:780px; }
+.overview-hero { margin-bottom:1.5rem; }
 .overview-hero h2 { color:#fff; font-size:1.25rem; margin-bottom:0.75rem; font-weight:700; }
 .overview-lead { color:#c9d1d9; font-size:0.88rem; line-height:1.6; margin-bottom:0.5rem; }
 .overview-lead a { color:#4CA7F9; text-decoration:none; }
 .overview-lead a:hover { text-decoration:underline; }
-.overview-list { margin:0.5rem 0 1rem 1.1rem; color:#8b949e; font-size:0.85rem; line-height:1.65; }
+.overview-list { margin:0.5rem 0 0 1.1rem; color:#8b949e; font-size:0.85rem; line-height:1.65; }
 .overview-list li { margin-bottom:0.35rem; }
-.overview-important { color:#c9d1d9; font-size:0.84rem; line-height:1.6; margin-bottom:1.25rem; padding:0.85rem 1rem; background:rgba(255,217,61,0.08); border-left:3px solid #FFD93D; border-radius:4px; }
-.overview-card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:1.25rem 1.4rem; margin-bottom:1rem; }
-.overview-card h3 { color:#00d4aa; font-size:0.95rem; margin-bottom:0.65rem; font-weight:600; }
+
+.overview-section { margin-bottom:1.5rem; }
+.overview-section h3 { color:#fff; font-size:1rem; font-weight:600; margin-bottom:0.6rem; }
+.overview-config-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.5rem; }
+.overview-config-list li { display:flex; gap:0.5rem; font-size:0.84rem; color:#8b949e; line-height:1.55; padding:0.6rem 0.85rem; background:#161b22; border:1px solid #30363d; border-radius:6px; }
+.config-label { font-weight:600; color:#4CA7F9; white-space:nowrap; min-width:5.5rem; flex-shrink:0; }
+
+.overview-disclaimer { padding:1rem 1.15rem; background:rgba(255,217,61,0.06); border:1px solid rgba(255,217,61,0.18); border-radius:8px; }
+.overview-disclaimer h3 { color:#FFD93D; }
+.overview-disclaimer p { color:#c9d1d9; font-size:0.84rem; line-height:1.6; margin:0; }
+.overview-disclaimer a { color:#4CA7F9; text-decoration:none; }
+.overview-disclaimer a:hover { text-decoration:underline; }
+
+.overview-scores-heading { color:#fff; font-size:1.1rem; font-weight:700; margin:0 0 0.35rem; }
+.overview-scores-lead { color:#8b949e; font-size:0.84rem; line-height:1.55; margin-bottom:1rem; }
+.overview-scores-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem; }
+@media (max-width:700px) { .overview-scores-grid { grid-template-columns:1fr; } }
+.overview-card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:1.25rem 1.4rem; }
+.overview-card h3 { color:#00d4aa; font-size:0.92rem; margin-bottom:0.65rem; font-weight:600; }
 .overview-card p { color:#8b949e; font-size:0.82rem; line-height:1.6; margin-bottom:0.5rem; }
+.overview-card p:last-child { margin-bottom:0; }
 .overview-card code { display:block; background:#0d1117; padding:0.45rem 0.6rem; border-radius:6px; color:#00d4aa; font-size:0.78rem; margin:0.35rem 0; }
-.overview-footer { font-size:0.78rem; color:#484f58; line-height:1.5; margin-top:0.5rem; }
+.overview-footer { font-size:0.78rem; color:#484f58; line-height:1.5; margin-top:0.75rem; }
 
 .tab-intro { font-size:0.8rem; color:#8b949e; line-height:1.55; margin:0 0 1rem 0; max-width:900px; }
 .layer-blurb { font-size:0.82rem; color:#c9d1d9; line-height:1.55; margin:0 0 1rem 0; max-width:880px; }
@@ -181,21 +199,48 @@ canvas { max-height:420px; }
     <div class="layer-page active" id="page-overview">
       <div class="overview-wrap">
     <div class="overview-hero">
-      <h2>What it does (in one minute)</h2>
-      <p class="overview-lead">The analyzer is a thematic research demo built on <a href="https://bigdata.com" target="_blank" rel="noopener">Bigdata.com</a>. It:</p>
+      <h2>What it does</h2>
+      <p class="overview-lead">The analyzer is a thematic research tool built on <a href="https://bigdata.com" target="_blank" rel="noopener">Bigdata.com</a>. It:</p>
       <ul class="overview-list">
-        <li>Searches news and documents for a fixed list of lenders and borrowers, using predefined topics (themes like spread power, redemption pressure, maturity wall risk).</li>
-        <li>Scores each organization by comparing how many on-topic, entity-relevant mentions fall into positive themes versus negative themes.</li>
-        <li>Produces a standalone HTML dashboard so you can compare entities side by side and drill into supporting snippets.</li>
+        <li>Searches news, filings, and transcripts for a configurable set of lenders and borrowers against predefined thematic queries (e.g. spread power, redemption pressure, maturity wall risk).</li>
+        <li>Scores each entity by comparing how many on-topic, entity-relevant mentions fall into positive themes versus negative themes.</li>
       </ul>
-      <p class="overview-important"><strong>Important:</strong> This is a technical showcase, not investment advice, a credit rating, or a trading signal. Results depend on configured entities, topics, date range, and how content is tagged and retrieved in Bigdata.</p>
     </div>
-    <div class="overview-card">
-      <h3>How to read scores</h3>
-      <p>Counts are on-topic snippets where the entity name appears in the returned text—not raw unfiltered search volume.</p>
-      <p><code>terms_power_score = positive_count / (positive_count + negative_count + 1) × 100</code></p>
-      <p><code>stress_score = 100 − terms_power_score</code></p>
-      <p><strong>Lenders</strong> are ranked by terms power (higher = more strength-themed mentions relative to stress). <strong>Borrowers</strong> use stress score (higher = more distress weight). <strong>Banks</strong> use net position (positive-theme mentions minus pullback-style mentions) when that layer is enabled.</p>
+
+    <div class="overview-section">
+        
+      <h3>Configurable</h3>
+      <ul class="overview-list">
+        <li> (Required re-run) </li>
+      </ul>
+      <ul class="overview-config-list">
+        <li><span class="config-label">Entities</span> Lender and borrower names are configurable.</li>
+        <li><span class="config-label">Themes</span> Search topics and their queries are configurable; You can define the risk and strength signals that matter to your investment process.</li>
+        <li><span class="config-label">Scoring</span> The scoring formula can be replaced with your own weighting, composite, or rules-based model.</li>
+        <li><span class="config-label">Date range</span> The search window is configurable; narrow to the last 30 days or widen to multi-year history.</li>
+      </ul>
+    </div>
+
+    <div class="overview-section overview-disclaimer">
+      <h3>Important</h3>
+      <p>This is a technical showcase of <a href="https://bigdata.com" target="_blank" rel="noopener">Bigdata.com</a> capabilities, not investment advice, a credit rating, or a trading signal. Scores are derived from mention counts after entity-in-text filtering and depend on the configured entities, topics, date range, and how content is indexed. Independent verification is recommended before any investment decision.</p>
+    </div>
+
+    <h2 class="overview-scores-heading">How to read scores</h2>
+    <p class="overview-scores-lead">Counts are on-topic snippets where the entity name appears in the returned text, not raw unfiltered search volume.</p>
+    <div class="overview-scores-grid">
+      <div class="overview-card">
+        <h3>Lender — Terms Power Score</h3>
+        <p><code>terms_power_score = positive_count / (positive_count + negative_count + 1) × 100</code></p>
+        <p>Positive themes include spread power, fundraise resilience, NAV stability, and covenant tightening. Negative themes include redemption pressure, NAV markdown, covenant waivers, PIK stress, and fee compression.</p>
+        <p><strong>Higher score = stronger lender positioning.</strong> A score near 100 means almost all entity-relevant mentions align with strength themes; a score near 0 means stress themes dominate.</p>
+      </div>
+      <div class="overview-card">
+        <h3>Borrower — Stress Score</h3>
+        <p><code>stress_score = 100 − terms_power_score</code></p>
+        <p>Positive (resilience) themes include revenue growth, refinancing success, margin expansion, and AI adoption. Negative (distress) themes include AI disruption risk, maturity wall, default/restructuring, and customer churn.</p>
+        <p><strong>Higher score = greater distress signal.</strong> A score near 100 means distress themes heavily outweigh resilience mentions; a low score means the borrower is showing more positive coverage.</p>
+      </div>
     </div>
     <p class="overview-footer">Search date filter: <strong>Jan 1, 2025 – Mar 30, 2026</strong>. Sources: news, filings, transcripts indexed by <a href='https://bigdata.com' target='_blank' rel='noopener' style='color:#4CA7F9;text-decoration:none;'>Bigdata.com</a>.</p>
     </div>
