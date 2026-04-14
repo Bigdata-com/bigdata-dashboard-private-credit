@@ -52,6 +52,33 @@ Local cache lives under `.cache/` (search JSON, scoring snapshots used by the au
 
 The workflow is defined in [`.github/workflows/pages.yml`](.github/workflows/pages.yml). In the repository settings, set Pages to build from GitHub Actions. Adjust the workflow or branch as needed for your fork.
 
+## Deploy (Fly.io)
+
+Apps for this repo should live under the Fly.io organization **`ravenpack-internation-slu`**. You need a Fly account that is a member of that org.
+
+1. Install [flyctl](https://fly.io/docs/hands-on/install-flyctl/) and sign in:
+   ```bash
+   fly auth login
+   ```
+2. Confirm the org exists and you have access:
+   ```bash
+   fly orgs show rave****
+   ```
+3. From the repository root (where `fly.toml` and `Dockerfile` are), **first-time setup** — create the app in that org (pick a unique name if `private-credit-stress` is taken):
+   ```bash
+   fly launch --org rave**** --no-deploy
+   ```
+   Align `app` in `fly.toml` with the name you chose, or accept the generated config.
+4. **Deploy:**
+   ```bash
+   fly deploy
+   ```
+   The app stays under the org it was created in; later deploys do not need `--org` unless you use `fly apps create` / `fly launch` again.
+5. **Single machine:** `fly.toml` sets **1024 MiB** RAM and **`min_machines_running = 1`**. If the app was ever scaled up, run **`fly scale count 1`** so only one machine runs.
+6. Open the app: `fly open` or the URL printed after deploy.
+
+Health checks use **`GET /health`** (no API key). The dashboard HTML is served at **`GET /`**; API routes require the user’s Bigdata key via **`X-API-KEY`**.
+
 ## Scoring
 
 ```
@@ -84,4 +111,3 @@ Counts are ratios of topic-aligned mentions (with entity name in the returned te
     └── utils.py
 ```
 
-Legacy paths under `docs/` from older layouts can be removed; the current pipeline uses `.cache/` and `dist/`. Details: `docs/README.md`.

@@ -291,7 +291,11 @@ def _write_methodology_sheet(ws: Any) -> None:
     ws["A1"].font = Font(bold=True, color="000000", size=14)
 
 
-def _load_audit_docs(layer: str) -> list[dict[str, Any]]:
+def _load_audit_docs(
+    layer: str,
+    entities: list[dict[str, str | None]] | None = None,
+    audit_dir: Path | None = None,
+) -> list[dict[str, Any]]:
     """Load documents from scoring output (``.cache/scoring_audit/``).
 
     Rows are exactly those persisted when ``compute_scores`` ran—single source of truth
@@ -300,15 +304,16 @@ def _load_audit_docs(layer: str) -> list[dict[str, Any]]:
     from config.entities import ALL_ENTITIES
     from src.utils import sanitize_filename
 
-    layer_entities = [e for e in ALL_ENTITIES if e["layer"] == layer]
+    layer_entities = [e for e in (entities or ALL_ENTITIES) if e["layer"] == layer]
     layer_topics = [t for t in TOPICS if layer in t["applies_to"]]
+    _audit_dir = audit_dir if audit_dir is not None else SCORING_AUDIT_DIR
     docs: list[dict[str, Any]] = []
 
     for entity in layer_entities:
         entity_slug = sanitize_filename(str(entity["name"]))
         for topic in layer_topics:
             topic_slug = sanitize_filename(str(topic["topic_name"]))
-            path = SCORING_AUDIT_DIR / f"{entity_slug}_{topic_slug}.json"
+            path = _audit_dir / f"{entity_slug}_{topic_slug}.json"
             if not path.exists():
                 continue
             payload = json.loads(path.read_text())
@@ -332,6 +337,8 @@ def _load_audit_docs(layer: str) -> list[dict[str, Any]]:
 def _prepare_layer_data(
     df: pd.DataFrame,
     layer: str,
+    entities: list[dict[str, str | None]] | None = None,
+    audit_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Prepare all chart/heatmap/theme data for a single layer."""
     layer_df = df[df["layer"] == layer].copy()
@@ -390,7 +397,7 @@ def _prepare_layer_data(
     negative_themes.sort(key=lambda x: x["count"], reverse=True)
     theme_topics = positive_themes + negative_themes
 
-    audit_docs = _load_audit_docs(layer)
+    audit_docs = _load_audit_docs(layer, entities=entities, audit_dir=audit_dir)
 
     out: dict[str, Any] = {
         "labels": labels,
@@ -883,7 +890,7 @@ def _build_html(
         bank_chart_block = (
             f"  if (layer === 'bank') {{\n"
             f"    const bs = {json.dumps(bank_data['scores'])};\n"
-            "    new Chart(document.getElementById('bankChart'), { type:'bar', data:{ labels:"
+            "    chartInstances['bankChart'] = new Chart(document.getElementById('bankChart'), { type:'bar', data:{ labels:"
             + json.dumps(bank_data["labels"])
             + ", datasets:[{ label:'Net Position', data:bs, backgroundColor:bs.map(v=>v>0?'#00d4aa':'#FF6B6B'), borderRadius:4 }] }, options:{ indexAxis:'y', responsive:true, plugins:{legend:{display:false}}, scales:{ x:{grid:{color:'#21262d'}}, y:{grid:{display:false}} } } } });\n"
             "    buildHeatmap('bankHeatmap', 'bank', "
@@ -929,7 +936,8 @@ def _build_html(
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ background:#0d1117; color:#c9d1d9; font-family:'Inter',system-ui,-apple-system,sans-serif; display:flex; height:100vh; overflow:hidden; }}
+html, body {{ height:100%; }}
+body {{ background:#0d1117; color:#c9d1d9; font-family:'Inter',system-ui,-apple-system,sans-serif; display:flex; height:100vh; max-height:100vh; overflow:hidden; }}
 
 .sidebar {{ width:220px; min-width:220px; background:#161b22; border-right:1px solid #30363d; display:flex; flex-direction:column; }}
 .sidebar-logo {{ padding:1.1rem 1.2rem; display:flex; align-items:center; gap:0.6rem; border-bottom:1px solid #30363d; }}
@@ -945,11 +953,12 @@ body {{ background:#0d1117; color:#c9d1d9; font-family:'Inter',system-ui,-apple-
 .nav-item.active svg {{ opacity:1; }}
 .sidebar-footer {{ margin-top:auto; padding:1rem 1.2rem; border-top:1px solid #30363d; font-size:0.68rem; color:#484f58; line-height:1.5; }}
 
-.main {{ flex:1; overflow-y:auto; display:flex; flex-direction:column; }}
-.topbar {{ padding:1rem 2rem; border-bottom:1px solid #30363d; display:flex; align-items:center; justify-content:space-between; background:#161b22; min-height:56px; }}
+/* One vertical scroll: .content only (.main does not scroll — avoids nested scrollbars). */
+.main {{ flex:1; min-width:0; min-height:0; overflow:hidden; display:flex; flex-direction:column; }}
+.topbar {{ flex-shrink:0; padding:1rem 2rem; border-bottom:1px solid #30363d; display:flex; align-items:center; justify-content:space-between; background:#161b22; min-height:56px; }}
 .topbar h1 {{ font-size:1.15rem; font-weight:600; color:#fff; }}
 .topbar .badge {{ background:rgba(76,167,249,0.15); color:#4CA7F9; font-size:0.7rem; padding:0.2rem 0.6rem; border-radius:99px; font-weight:600; }}
-.content {{ flex:1; padding:1.5rem 2rem 2rem; overflow-y:auto; }}
+.content {{ flex:1; min-height:0; padding:1.5rem 2rem 2rem; overflow-y:auto; overflow-x:hidden; }}
 
 .tabs {{ display:flex; gap:0; border-bottom:1px solid #30363d; margin-bottom:1.5rem; }}
 .tab {{ padding:0.65rem 1.2rem; font-size:0.8rem; font-weight:500; color:#8b949e; cursor:pointer; border-bottom:2px solid transparent; transition:all 0.15s; }}
@@ -995,7 +1004,8 @@ canvas {{ max-height:420px; }}
 .audit-filters select {{ background:#0d1117; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:0.4rem 0.7rem; font-size:0.8rem; cursor:pointer; min-width:160px; }}
 .audit-filters select:focus {{ border-color:#00d4aa; outline:none; }}
 .audit-count {{ font-size:0.75rem; color:#8b949e; margin-bottom:0.75rem; }}
-.audit-table-wrap {{ overflow-x:auto; max-height:500px; overflow-y:auto; }}
+/* Table grows with page; .content is the only vertical scroller (sticky thead uses .content as scroll root). */
+.audit-table-wrap {{ overflow-x:auto; }}
 .at {{ border-collapse:collapse; width:100%; font-size:0.78rem; }}
 .at th {{ background:#1a1a2e; color:#00d4aa; padding:8px 10px; text-align:left; font-weight:600; white-space:nowrap; position:sticky; top:0; z-index:1; }}
 .at td {{ padding:8px 10px; border-bottom:1px solid #21262d; vertical-align:top; }}
@@ -1083,10 +1093,110 @@ canvas {{ max-height:420px; }}
 
 .layer-page {{ display:none; }}
 .layer-page.active {{ display:block; }}
+
+/* ── Auth / Settings overlay ─────────────────────────────── */
+.overlay {{ position:fixed; inset:0; z-index:3000; background:rgba(0,0,0,0.7); display:none; align-items:center; justify-content:center; }}
+.overlay.visible {{ display:flex; }}
+.overlay-box {{ background:#161b22; border:1px solid #30363d; border-radius:12px; padding:28px; width:90%; max-width:440px; }}
+.overlay-box h2 {{ color:#fff; font-size:1.1rem; margin-bottom:0.5rem; display:flex; align-items:center; gap:0.5rem; }}
+.overlay-box p.overlay-desc {{ color:#8b949e; font-size:0.82rem; line-height:1.55; margin-bottom:1rem; }}
+.api-key-input-wrap {{ display:flex; gap:0.5rem; margin-bottom:0.75rem; }}
+.api-key-input-wrap input {{ flex:1; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:0.5rem 0.7rem; font-size:0.85rem; }}
+.api-key-input-wrap input:focus {{ border-color:#4CA7F9; outline:none; }}
+.eye-btn {{ background:none; border:none; color:#8b949e; cursor:pointer; font-size:1rem; padding:0 0.3rem; }}
+#apiKeyStatus {{ font-size:0.75rem; color:#8b949e; margin-bottom:0.75rem; }}
+.overlay-actions {{ display:flex; gap:0.5rem; justify-content:flex-end; }}
+.overlay-actions button {{ padding:0.45rem 1rem; border-radius:6px; border:1px solid #30363d; font-size:0.8rem; font-weight:600; cursor:pointer; }}
+.btn-save-key {{ background:#4CA7F9; color:#fff; border-color:#4CA7F9; }}
+.btn-save-key:hover {{ background:#3d96e0; }}
+.btn-clear-key {{ background:transparent; color:#FF6B6B; border-color:#FF6B6B; }}
+.btn-close-settings {{ background:transparent; color:#8b949e; }}
+.nav-item-settings {{ margin-top:0.5rem; border-top:1px solid #21262d; padding-top:0.5rem; }}
+
+/* ── Customize Entity overlay ────────────────────────────── */
+.entity-overlay {{ max-width:700px; }}
+.entity-overlay textarea {{ width:100%; background:#0d1117; color:#c9d1d9; border:1px solid #30363d; border-radius:6px; padding:0.6rem; font-size:0.82rem; min-height:80px; resize:vertical; font-family:inherit; }}
+.entity-overlay textarea:focus {{ border-color:#4CA7F9; outline:none; }}
+.entity-table {{ width:100%; border-collapse:collapse; font-size:0.8rem; margin:0.75rem 0; }}
+.entity-table th {{ background:#1a1a2e; color:#4CA7F9; padding:8px 10px; text-align:left; font-weight:600; }}
+.entity-table td {{ padding:8px 10px; border-bottom:1px solid #21262d; }}
+.entity-table tr:hover {{ background:#1c2128; }}
+.btn-remove-entity {{ background:none; border:none; color:#FF6B6B; cursor:pointer; font-size:0.8rem; font-weight:600; }}
+.btn-remove-entity:hover {{ text-decoration:underline; }}
+.entity-step {{ display:none; }}
+.entity-step.active {{ display:block; }}
+
+/* ── Pipeline progress overlay ───────────────────────────── */
+.pipeline-overlay {{ max-width:400px; text-align:center; }}
+.pipeline-spinner {{ width:40px; height:40px; border:3px solid #30363d; border-top-color:#4CA7F9; border-radius:50%; animation:spin 0.8s linear infinite; margin:0 auto 1rem; }}
+@keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+#pipelineProgress {{ color:#c9d1d9; font-size:0.85rem; margin-bottom:0.5rem; }}
+#pipelineElapsed {{ color:#484f58; font-size:0.75rem; }}
+
+/* ── Topbar customize button ─────────────────────────────── */
+.topbar-right {{ display:flex; align-items:center; gap:0.6rem; }}
+.btn-customize {{ background:rgba(0,212,170,0.12); color:#00d4aa; border:1px solid rgba(0,212,170,0.3); border-radius:6px; padding:0.3rem 0.8rem; font-size:0.72rem; font-weight:600; cursor:pointer; display:none; white-space:nowrap; }}
+.btn-customize:hover {{ background:rgba(0,212,170,0.2); }}
+.btn-reset-custom {{ background:rgba(255,107,107,0.12); color:#FF6B6B; border:1px solid rgba(255,107,107,0.3); border-radius:6px; padding:0.3rem 0.8rem; font-size:0.72rem; font-weight:600; cursor:pointer; display:none; white-space:nowrap; }}
+.btn-reset-custom:hover {{ background:rgba(255,107,107,0.2); }}
 </style>
 </head>
 <body>
 
+<!-- ── API Key Gate Overlay ────────────────────────────── -->
+<div class="overlay" id="settingsOverlay">
+  <div class="overlay-box">
+    <h2>&#128273; Bigdata API Key</h2>
+    <p class="overlay-desc" id="settingsApiKeyDescription">Enter your Bigdata API key to continue. The dashboard will be available after you save.</p>
+    <div class="api-key-input-wrap">
+      <input type="password" id="settingsApiKey" placeholder="Paste your Bigdata API key">
+      <button class="eye-btn" onclick="toggleApiKeyVisibility()" title="Show / hide key">&#128065;</button>
+    </div>
+    <div id="apiKeyStatus"></div>
+    <div class="overlay-actions">
+      <button class="btn-close-settings" onclick="closeSettings()">Cancel</button>
+      <button class="btn-clear-key" onclick="clearApiKey()">Clear</button>
+      <button class="btn-save-key" onclick="saveApiKey()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Custom Entity Overlay ──────────────────────────── -->
+<div class="overlay" id="entityOverlay">
+  <div class="overlay-box entity-overlay">
+    <div class="entity-step active" id="entityStepInput">
+      <h2>Customize Entities</h2>
+      <p class="overlay-desc">Enter one company per line (best for names with commas), or comma-separated names, for the <strong id="entityLayerLabel">borrower</strong> layer.</p>
+      <textarea id="entityNamesInput" placeholder="Chegg&#10;2U, Inc.&#10;Pluralsight"></textarea>
+      <div class="overlay-actions" style="margin-top:0.75rem;">
+        <button class="btn-close-settings" onclick="closeEntityOverlay()">Cancel</button>
+        <button class="btn-save-key" onclick="lookupEntities()">Look Up</button>
+      </div>
+    </div>
+    <div class="entity-step" id="entityStepConfirm">
+      <h2>Confirm Entities</h2>
+      <p class="overlay-desc">Review the resolved companies below. Remove any you don't want, then confirm.</p>
+      <div style="max-height:350px;overflow-y:auto;" id="entityTableWrap"></div>
+      <div class="overlay-actions" style="margin-top:0.75rem;">
+        <button class="btn-close-settings" onclick="backToEntityInput()">Back</button>
+        <button class="btn-close-settings" onclick="closeEntityOverlay()">Cancel</button>
+        <button class="btn-save-key" onclick="confirmEntities()">Confirm &amp; Run</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Pipeline Progress Overlay ──────────────────────── -->
+<div class="overlay" id="pipelineOverlay">
+  <div class="overlay-box pipeline-overlay">
+    <div class="pipeline-spinner"></div>
+    <h2>Running Pipeline</h2>
+    <div id="pipelineProgress">Starting...</div>
+    <div id="pipelineElapsed"></div>
+  </div>
+</div>
+
+<div id="appContent" style="display:none;flex:1;min-width:0;min-height:0;height:100vh;">
 <nav class="sidebar">
   <div class="sidebar-logo">
     <svg viewBox="0 0 159.7 159.7"><path fill="#4CA7F9" d="M38.11,0h83.48c21.03,0,38.11,17.08,38.11,38.11v83.48c0,21.03-17.08,38.11-38.11,38.11H38.11c-21.03,0-38.11-17.08-38.11-38.11V38.11C0,17.08,17.08,0,38.11,0Z"/><path fill="#FFFDF5" d="M105.69,137.06c-8.4,0-16.35-3.27-22.4-9.21-6.07-5.96-9.41-13.84-9.41-22.18v-51.63c0-11.38-8.72-20.3-19.87-20.3-5.4,0-10.44,2.12-14.21,5.96-3.74,3.82-5.81,8.91-5.81,14.34s2.06,10.52,5.81,14.34c3.76,3.84,8.81,5.96,14.21,5.96h13.36v11.09h-15.49c-8.26,0-15.83-3.26-21.32-9.19-5.4-5.83-8.37-13.71-8.37-22.2s3.34-16.22,9.41-22.18c6.05-5.94,14-9.21,22.4-9.21s16.36,3.27,22.4,9.21c6.07,5.96,9.41,13.84,9.41,22.18v51.63c0,11.38,8.72,20.3,19.86,20.3,5.4,0,10.44-2.12,14.21-5.96,3.74-3.82,5.81-8.91,5.81-14.34s-2.06-10.52-5.81-14.34c-3.76-3.84-8.81-5.96-14.21-5.96h-13.26v-11.09h15.4c8.26,0,15.83,3.26,21.32,9.19,5.4,5.82,8.37,13.71,8.37,22.2s-3.34,16.22-9.41,22.18c-6.05,5.94-14,9.21-22.4,9.21Z"/></svg>
@@ -1106,6 +1216,10 @@ canvas {{ max-height:420px; }}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
       Lenders
     </div>{bank_nav_html}
+    <div class="nav-item nav-item-settings" onclick="openSettings()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      API Key
+    </div>
   </div>
   <div class="sidebar-footer">Private Credit Stress Analyzer<br>Powered by Bigdata API</div>
 </nav>
@@ -1113,7 +1227,11 @@ canvas {{ max-height:420px; }}
 <div class="main">
   <div class="topbar">
     <h1 id="pageTitle">Private Credit Stress Analyzer</h1>
-    <span class="badge" id="pageBadge">Overview &middot; thematic demo</span>
+    <div class="topbar-right">
+      <button class="btn-customize" id="btnCustomize" onclick="openCustomEntityModal()">Customize Entities</button>
+      <button class="btn-reset-custom" id="btnResetCustom" onclick="resetToDefault()">Reset to Default</button>
+      <span class="badge" id="pageBadge">Overview &middot; thematic demo</span>
+    </div>
   </div>
   <div class="content">
     {overview_page}
@@ -1122,6 +1240,7 @@ canvas {{ max-height:420px; }}
     {bank_page_html}
   </div>
 </div>
+</div><!-- /appContent -->
 
 <script>
 Chart.defaults.color = '#c9d1d9';
@@ -1169,11 +1288,21 @@ function escapeHeatmapAttr(s) {{
 }}
 
 function escapeHtml(s) {{
-  return String(s)
+  return String(s == null ? '' : s)
     .replace(/&/g,'&amp;')
     .replace(/</g,'&lt;')
     .replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;');
+}}
+
+/** Only http(s) URLs for links; blocks javascript: and other schemes. */
+function safeHttpUrl(u) {{
+  if (u == null || typeof u !== 'string') return '';
+  const t = u.trim();
+  if (!t) return '';
+  const low = t.slice(0, 8).toLowerCase();
+  if (low.startsWith('https://') || low.startsWith('http://')) return t;
+  return '';
 }}
 
 function openAuditFromHeatmap(layer, entity, topic) {{
@@ -1220,7 +1349,7 @@ function buildHeatmap(id, layer, entities, topics, data, polarities) {{
   }});
   h += '</tr></thead><tbody>';
   data.forEach((row,i) => {{
-    h += '<tr><td style="text-align:left;font-weight:600;white-space:nowrap;">'+entities[i]+'</td>';
+    h += '<tr><td style="text-align:left;font-weight:600;white-space:nowrap;">'+escapeHtml(entities[i])+'</td>';
     row.forEach((v, j) => {{
       const p = Math.min(v/mx,1);
       const neg = polarities && polarities[j] === 'negative';
@@ -1272,9 +1401,9 @@ function initAudit(layer) {{
   const polarities = ['positive','negative'];
 
   const fc = document.getElementById(layer+'AuditFilters');
-  fc.innerHTML = '<select id="'+layer+'FEntity"><option value="">All Entities</option>'+entities.map(e=>'<option>'+e+'</option>').join('')+'</select>'
-    + '<select id="'+layer+'FTopic"><option value="">All Topics</option>'+topics.map(t=>'<option>'+t+'</option>').join('')+'</select>'
-    + '<select id="'+layer+'FPol"><option value="">All Polarities</option>'+polarities.map(p=>'<option value="'+p+'">'+p[0].toUpperCase()+p.slice(1)+'</option>').join('')+'</select>';
+  fc.innerHTML = '<select id="'+layer+'FEntity"><option value="">All Entities</option>'+entities.map(e=>'<option value="'+escapeHtml(e)+'">'+escapeHtml(e)+'</option>').join('')+'</select>'
+    + '<select id="'+layer+'FTopic"><option value="">All Topics</option>'+topics.map(t=>'<option value="'+escapeHtml(t)+'">'+escapeHtml(t)+'</option>').join('')+'</select>'
+    + '<select id="'+layer+'FPol"><option value="">All Polarities</option>'+polarities.map(p=>{{ const lab = p[0].toUpperCase()+p.slice(1); return '<option value="'+escapeHtml(p)+'">'+escapeHtml(lab)+'</option>'; }}).join('')+'</select>';
 
   [layer+'FEntity',layer+'FTopic',layer+'FPol'].forEach(id => {{
     document.getElementById(id).addEventListener('change', () => renderAudit(layer));
@@ -1303,13 +1432,15 @@ function renderAudit(layer) {{
   filtered.slice(0,200).forEach(d => {{
     const pc = d.polarity === 'positive' ? 'pos' : 'neg';
     const pi = d.polarity === 'positive' ? '+' : '&minus;';
-    const link = d.url ? '<a href="'+d.url+'" target="_blank" rel="noopener">View &rarr;</a>' : '';
-    h += '<tr><td style="font-weight:600;white-space:nowrap;">'+d.entity+'</td>'
-      + '<td style="white-space:nowrap;">'+d.topic+'</td>'
-      + '<td><span class="pol-badge '+pc+'">'+pi+' '+d.polarity+'</span></td>'
-      + '<td class="td-hl">'+d.headline+'</td>'
-      + '<td class="td-snip">'+d.snippet+'</td>'
-      + '<td class="td-date">'+d.timestamp+'</td>'
+    const href = safeHttpUrl(d.url);
+    const link = href ? '<a href="'+escapeHtml(href)+'" target="_blank" rel="noopener noreferrer">View &rarr;</a>' : '';
+    const pol = String(d.polarity || '');
+    h += '<tr><td style="font-weight:600;white-space:nowrap;">'+escapeHtml(d.entity)+'</td>'
+      + '<td style="white-space:nowrap;">'+escapeHtml(d.topic)+'</td>'
+      + '<td><span class="pol-badge '+pc+'">'+pi+' '+escapeHtml(pol)+'</span></td>'
+      + '<td class="td-hl">'+escapeHtml(d.headline)+'</td>'
+      + '<td class="td-snip">'+escapeHtml(d.snippet)+'</td>'
+      + '<td class="td-date">'+escapeHtml(d.timestamp)+'</td>'
       + '<td class="td-link">'+link+'</td></tr>';
   }});
   h += '</tbody></table>';
@@ -1319,27 +1450,367 @@ function renderAudit(layer) {{
 function initCharts(layer) {{
   chartsInitialized[layer] = true;
   if (layer === 'lender') {{
-    new Chart(document.getElementById('lenderRadarChart'), {{ type:'radar', data:{{ labels:{lender_radar_labels}, datasets:{lender_radar_datasets} }}, options:{{ responsive:true, plugins:{{legend:{{position:'bottom',labels:{{boxWidth:12}}}}}}, scales:{{ r:{{beginAtZero:true, grid:{{color:'#21262d'}}, angleLines:{{color:'#21262d'}}, pointLabels:{{font:{{size:10}},color:'#c9d1d9'}}}} }} }} }});
+    chartInstances['lenderRadarChart'] = new Chart(document.getElementById('lenderRadarChart'), {{ type:'radar', data:{{ labels:{lender_radar_labels}, datasets:{lender_radar_datasets} }}, options:{{ responsive:true, plugins:{{legend:{{position:'bottom',labels:{{boxWidth:12}}}}}}, scales:{{ r:{{beginAtZero:true, grid:{{color:'#21262d'}}, angleLines:{{color:'#21262d'}}, pointLabels:{{font:{{size:10}},color:'#c9d1d9'}}}} }} }} }});
     const s = {json.dumps(lender_data["scores"])};
     const lLabels = {json.dumps(lender_data["labels"])};
     const lScoreCanvas = document.getElementById('lenderChart');
     const lScoreWrap = lScoreCanvas && lScoreCanvas.closest('.lender-score-chart-wrap');
     if (lScoreWrap) {{ lScoreWrap.style.height = Math.max(320, lLabels.length * 28) + 'px'; }}
-    new Chart(lScoreCanvas, {{ type:'bar', data:{{ labels:lLabels, datasets:[{{ label:'Terms Power Score', data:s, backgroundColor:s.map(v=>v>50?'#00d4aa':v>30?'#FFD93D':'#FF6B6B'), borderRadius:4 }}] }}, options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{{legend:{{display:false}}}}, scales:{{ x:{{min:0,max:100,grid:{{color:'#21262d'}}}}, y:{{grid:{{display:false}}, ticks:{{autoSkip:false, maxRotation:0}}}} }} }} }});
+    chartInstances['lenderChart'] = new Chart(lScoreCanvas, {{ type:'bar', data:{{ labels:lLabels, datasets:[{{ label:'Terms Power Score', data:s, backgroundColor:s.map(v=>v>50?'#00d4aa':v>30?'#FFD93D':'#FF6B6B'), borderRadius:4 }}] }}, options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{{legend:{{display:false}}}}, scales:{{ x:{{min:0,max:100,grid:{{color:'#21262d'}}}}, y:{{grid:{{display:false}}, ticks:{{autoSkip:false, maxRotation:0}}}} }} }} }});
     buildHeatmap('lenderHeatmap', 'lender', {json.dumps(lender_data["heatmap_entities"])}, {json.dumps(lender_data["heatmap_topics"])}, {json.dumps(lender_data["heatmap_data"])}, {json.dumps(lender_data["heatmap_topic_polarities"])});
   }}
   if (layer === 'borrower') {{
-    new Chart(document.getElementById('borrowerChart'), {{ type:'radar', data:{{ labels:{borrower_radar_labels}, datasets:{borrower_radar_datasets} }}, options:{{ responsive:true, plugins:{{legend:{{position:'bottom',labels:{{boxWidth:12}}}}}}, scales:{{ r:{{beginAtZero:true, grid:{{color:'#21262d'}}, angleLines:{{color:'#21262d'}}, pointLabels:{{font:{{size:10}},color:'#c9d1d9'}}}} }} }} }});
+    chartInstances['borrowerChart'] = new Chart(document.getElementById('borrowerChart'), {{ type:'radar', data:{{ labels:{borrower_radar_labels}, datasets:{borrower_radar_datasets} }}, options:{{ responsive:true, plugins:{{legend:{{position:'bottom',labels:{{boxWidth:12}}}}}}, scales:{{ r:{{beginAtZero:true, grid:{{color:'#21262d'}}, angleLines:{{color:'#21262d'}}, pointLabels:{{font:{{size:10}},color:'#c9d1d9'}}}} }} }} }});
     const bScores = {json.dumps(borrower_data["scores"])};
     const bLabels = {json.dumps(borrower_data["labels"])};
     const bScoreCanvas = document.getElementById('borrowerScoreChart');
     const bScoreWrap = bScoreCanvas && bScoreCanvas.closest('.borrower-score-chart-wrap');
     if (bScoreWrap) {{ bScoreWrap.style.height = Math.max(320, bLabels.length * 28) + 'px'; }}
-    new Chart(bScoreCanvas, {{ type:'bar', data:{{ labels:bLabels, datasets:[{{ label:'Stress Score', data:bScores, backgroundColor:bScores.map(v=>v>=70?'#FF6B6B':v>=50?'#FFD93D':'#00d4aa'), borderRadius:4 }}] }}, options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{{legend:{{display:false}}}}, scales:{{ x:{{min:0,max:100,grid:{{color:'#21262d'}}}}, y:{{grid:{{display:false}}, ticks:{{autoSkip:false, maxRotation:0}}}} }} }} }});
+    chartInstances['borrowerScoreChart'] = new Chart(bScoreCanvas, {{ type:'bar', data:{{ labels:bLabels, datasets:[{{ label:'Stress Score', data:bScores, backgroundColor:bScores.map(v=>v>=70?'#FF6B6B':v>=50?'#FFD93D':'#00d4aa'), borderRadius:4 }}] }}, options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{{legend:{{display:false}}}}, scales:{{ x:{{min:0,max:100,grid:{{color:'#21262d'}}}}, y:{{grid:{{display:false}}, ticks:{{autoSkip:false, maxRotation:0}}}} }} }} }});
     buildHeatmap('borrowerHeatmap', 'borrower', {json.dumps(borrower_data["heatmap_entities"])}, {json.dumps(borrower_data["heatmap_topics"])}, {json.dumps(borrower_data["heatmap_data"])}, {json.dumps(borrower_data["heatmap_topic_polarities"])});
   }}
 {bank_chart_block}
 }}
+
+/* ── API Key helpers ─────────────────────────────────── */
+const API_KEY_STORAGE = 'bigdata_api_key';
+function getUserApiKey() {{ return localStorage.getItem(API_KEY_STORAGE) || ''; }}
+function setUserApiKey(k) {{ localStorage.setItem(API_KEY_STORAGE, k); }}
+function hasUserApiKey() {{ return !!getUserApiKey(); }}
+
+async function apiRequest(url, opts = {{}}) {{
+  const key = getUserApiKey();
+  if (!opts.headers) opts.headers = {{}};
+  if (key) opts.headers['X-API-KEY'] = key;
+  const resp = await fetch(url, opts);
+  if (resp.status === 401) {{
+    openSettings();
+    throw new Error('API key required');
+  }}
+  return resp;
+}}
+
+let apiKeyGateActive = false;
+
+function openSettings(isGate) {{
+  apiKeyGateActive = !!isGate;
+  const ov = document.getElementById('settingsOverlay');
+  const inp = document.getElementById('settingsApiKey');
+  const desc = document.getElementById('settingsApiKeyDescription');
+  const cancel = ov.querySelector('.btn-close-settings');
+  const status = document.getElementById('apiKeyStatus');
+  inp.value = getUserApiKey();
+  if (isGate) {{
+    desc.textContent = 'Enter your Bigdata API key to continue. The dashboard will be available after you save.';
+    cancel.style.display = 'none';
+    status.textContent = 'Enter your key below to get started.';
+  }} else {{
+    desc.textContent = 'Enter or update your Bigdata API key for authenticated requests.';
+    cancel.style.display = '';
+    status.textContent = hasUserApiKey() ? '\\u2713 Custom API key is set' : 'No key set.';
+  }}
+  ov.classList.add('visible');
+}}
+
+function closeSettings() {{
+  if (apiKeyGateActive) return;
+  document.getElementById('settingsOverlay').classList.remove('visible');
+}}
+
+function saveApiKey() {{
+  const key = document.getElementById('settingsApiKey').value.trim();
+  if (!key) return;
+  setUserApiKey(key);
+  const wasGate = apiKeyGateActive;
+  apiKeyGateActive = false;
+  document.getElementById('settingsOverlay').classList.remove('visible');
+  if (wasGate) {{
+    document.getElementById('appContent').style.display = 'flex';
+  }}
+}}
+
+function clearApiKey() {{
+  document.getElementById('settingsApiKey').value = '';
+  localStorage.removeItem(API_KEY_STORAGE);
+  document.getElementById('apiKeyStatus').textContent = 'Key cleared.';
+}}
+
+function toggleApiKeyVisibility() {{
+  const inp = document.getElementById('settingsApiKey');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}}
+
+document.getElementById('settingsOverlay').addEventListener('click', function(e) {{
+  if (e.target === this && !apiKeyGateActive) closeSettings();
+}});
+
+/* ── Launch gate ─────────────────────────────────────── */
+(function() {{
+  if (!hasUserApiKey()) {{
+    document.getElementById('appContent').style.display = 'none';
+    openSettings(true);
+  }} else {{
+    document.getElementById('appContent').style.display = 'flex';
+  }}
+}})();
+
+/* ── Custom entity state ─────────────────────────────── */
+let currentCustomLayer = null;
+let confirmedEntities = [];
+const defaultLayerData = {{
+  lender: {{ labels:{json.dumps(lender_data["labels"])}, scores:{json.dumps(lender_data["scores"])}, score_col:'{lender_data["score_col"]}', heatmap_entities:{json.dumps(lender_data["heatmap_entities"])}, heatmap_topics:{json.dumps(lender_data["heatmap_topics"])}, heatmap_data:{json.dumps(lender_data["heatmap_data"])}, heatmap_topic_polarities:{json.dumps(lender_data["heatmap_topic_polarities"])}, audit_docs:{json.dumps(lender_data["audit_docs"], default=str)}, entity_count:{lender_data["entity_count"]}, topic_count:{lender_data["topic_count"]}, radar_datasets:{json.dumps(lender_data.get("radar_datasets", []))}, theme_topics:{json.dumps(lender_data["theme_topics"])} }},
+  borrower: {{ labels:{json.dumps(borrower_data["labels"])}, scores:{json.dumps(borrower_data["scores"])}, score_col:'{borrower_data["score_col"]}', heatmap_entities:{json.dumps(borrower_data["heatmap_entities"])}, heatmap_topics:{json.dumps(borrower_data["heatmap_topics"])}, heatmap_data:{json.dumps(borrower_data["heatmap_data"])}, heatmap_topic_polarities:{json.dumps(borrower_data["heatmap_topic_polarities"])}, audit_docs:{json.dumps(borrower_data["audit_docs"], default=str)}, entity_count:{borrower_data["entity_count"]}, topic_count:{borrower_data["topic_count"]}, radar_datasets:{json.dumps(borrower_data.get("radar_datasets", []))}, theme_topics:{json.dumps(borrower_data["theme_topics"])} }}
+}};
+let isCustom = {{ lender: false, borrower: false }};
+
+function openCustomEntityModal() {{
+  const layer = document.querySelector('.nav-item.active')?.getAttribute('data-layer');
+  if (!layer || layer === 'overview') return;
+  currentCustomLayer = layer;
+  document.getElementById('entityLayerLabel').textContent = layer;
+  document.getElementById('entityNamesInput').value = '';
+  document.getElementById('entityStepInput').classList.add('active');
+  document.getElementById('entityStepConfirm').classList.remove('active');
+  document.getElementById('entityOverlay').classList.add('visible');
+}}
+
+function closeEntityOverlay() {{
+  document.getElementById('entityOverlay').classList.remove('visible');
+}}
+
+function backToEntityInput() {{
+  document.getElementById('entityStepConfirm').classList.remove('active');
+  document.getElementById('entityStepInput').classList.add('active');
+}}
+
+function parseCompanyNames(raw) {{
+  const t = raw.trim();
+  if (!t) return [];
+  const lines = t.split(/\\r?\\n/).map(s => s.trim()).filter(Boolean);
+  if (lines.length > 1) return lines;
+  return t.split(',').map(s => s.trim()).filter(Boolean);
+}}
+
+async function lookupEntities() {{
+  const raw = document.getElementById('entityNamesInput').value;
+  const names = parseCompanyNames(raw);
+  if (!names.length) return;
+  const btn = document.querySelector('#entityStepInput .btn-save-key');
+  btn.textContent = 'Looking up...';
+  btn.disabled = true;
+  try {{
+    const resp = await apiRequest('/api/company-lookup', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ names, layer: currentCustomLayer }})
+    }});
+    const data = await resp.json();
+    confirmedEntities = [];
+    data.results.forEach(r => {{
+      if (r.matches && r.matches.length > 0) {{
+        const m = r.matches[0];
+        confirmedEntities.push({{
+          input_name: r.input_name,
+          name: m.name || r.input_name,
+          rp_entity_id: m.id || '',
+          country: m.country || '',
+          sector: m.sector || '',
+          ticker: (m.listing_values && m.listing_values[0]) ? m.listing_values[0].split(':')[1] : null,
+          type: m.type || '',
+        }});
+      }} else {{
+        confirmedEntities.push({{ input_name: r.input_name, name: r.input_name, rp_entity_id: '', country: '', sector: '', ticker: null, type: 'Unknown', error: r.error || 'Not found' }});
+      }}
+    }});
+    renderEntityTable();
+    document.getElementById('entityStepInput').classList.remove('active');
+    document.getElementById('entityStepConfirm').classList.add('active');
+  }} catch (e) {{
+    alert('Lookup failed: ' + e.message);
+  }} finally {{
+    btn.textContent = 'Look Up';
+    btn.disabled = false;
+  }}
+}}
+
+function renderEntityTable() {{
+  let h = '<table class="entity-table"><thead><tr><th>Your Input</th><th>Bigdata Name</th><th>Entity ID</th><th>Country</th><th>Sector</th><th></th></tr></thead><tbody>';
+  confirmedEntities.forEach((e, i) => {{
+    const errCls = e.error ? 'style="color:#FF6B6B"' : '';
+    h += '<tr><td>'+escapeHtml(e.input_name)+'</td><td '+errCls+'>'+escapeHtml(e.name)+(e.error ? ' ('+escapeHtml(e.error)+')' : '')+'</td><td>'+escapeHtml(e.rp_entity_id)+'</td><td>'+escapeHtml(e.country)+'</td><td>'+escapeHtml(e.sector)+'</td><td><button class="btn-remove-entity" onclick="removeEntity('+i+')">Remove</button></td></tr>';
+  }});
+  h += '</tbody></table>';
+  document.getElementById('entityTableWrap').innerHTML = h;
+}}
+
+function removeEntity(idx) {{
+  confirmedEntities.splice(idx, 1);
+  renderEntityTable();
+}}
+
+async function confirmEntities() {{
+  const valid = confirmedEntities.filter(e => !e.error);
+  if (!valid.length) {{ alert('No valid entities to run.'); return; }}
+  closeEntityOverlay();
+  const payload = {{
+    entities: valid.map(e => ({{
+      name: e.name,
+      rp_entity_id: e.rp_entity_id || null,
+      layer: currentCustomLayer,
+      ticker: e.ticker || null
+    }}))
+  }};
+  document.getElementById('pipelineOverlay').classList.add('visible');
+  document.getElementById('pipelineProgress').textContent = 'Starting...';
+  document.getElementById('pipelineElapsed').textContent = '';
+  try {{
+    const runResp = await apiRequest('/api/pipeline/run', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify(payload)
+    }});
+    const {{ job_id }} = await runResp.json();
+    await pollPipeline(job_id);
+  }} catch (e) {{
+    document.getElementById('pipelineOverlay').classList.remove('visible');
+    alert('Pipeline failed: ' + e.message);
+  }}
+}}
+
+async function pollPipeline(jobId) {{
+  while (true) {{
+    await new Promise(r => setTimeout(r, 2000));
+    try {{
+      const resp = await apiRequest('/api/pipeline/status/' + jobId);
+      const st = await resp.json();
+      document.getElementById('pipelineProgress').textContent = st.progress || st.status;
+      document.getElementById('pipelineElapsed').textContent = st.elapsed_ms ? (st.elapsed_ms / 1000).toFixed(1) + 's elapsed' : '';
+      if (st.status === 'complete') {{
+        const dataResp = await apiRequest('/api/pipeline/data/' + jobId);
+        const layerData = await dataResp.json();
+        document.getElementById('pipelineOverlay').classList.remove('visible');
+        updateLayerData(currentCustomLayer, layerData);
+        return;
+      }}
+      if (st.status === 'failed') {{
+        document.getElementById('pipelineOverlay').classList.remove('visible');
+        alert('Pipeline failed: ' + (st.error || 'Unknown error'));
+        return;
+      }}
+    }} catch (e) {{
+      document.getElementById('pipelineOverlay').classList.remove('visible');
+      alert('Polling error: ' + e.message);
+      return;
+    }}
+  }}
+}}
+
+/* ── Chart instance tracking for re-rendering ────────── */
+const chartInstances = {{}};
+
+function destroyCharts(layer) {{
+  const ids = {{
+    lender: ['lenderRadarChart', 'lenderChart'],
+    borrower: ['borrowerChart', 'borrowerScoreChart'],
+    bank: ['bankChart'],
+  }};
+  (ids[layer] || []).forEach(cid => {{
+    const el = document.getElementById(cid);
+    if (!el) return;
+    const existing = typeof Chart !== 'undefined' && Chart.getChart ? Chart.getChart(el) : null;
+    if (existing) existing.destroy();
+    delete chartInstances[cid];
+  }});
+}}
+
+function updateLayerData(layer, data) {{
+  isCustom[layer] = true;
+  auditData[layer] = data.audit_docs || [];
+  auditsInitialized[layer] = false;
+
+  destroyCharts(layer);
+  chartsInitialized[layer] = false;
+
+  pageBadges[layer] = data.entity_count + ' entities (custom) &middot; ' + data.topic_count + ' topics';
+  const activeLyr = document.querySelector('.nav-item.active')?.getAttribute('data-layer');
+  if (activeLyr === layer) document.getElementById('pageBadge').innerHTML = pageBadges[layer];
+
+  /* Rebuild stat cards */
+  const page = document.getElementById('page-' + layer);
+  if (page) {{
+    const statVals = page.querySelectorAll('.stat-val');
+    if (statVals.length >= 4) {{
+      statVals[0].textContent = data.entity_count;
+      statVals[1].textContent = data.topic_count;
+      const scores = data.scores || [];
+      statVals[2].textContent = scores.length ? Math.max(...scores).toFixed(1) : '0.0';
+      statVals[3].textContent = scores.length ? Math.min(...scores).toFixed(1) : '0.0';
+    }}
+  }}
+
+  /* Rebuild charts */
+  if (layer === 'lender') {{
+    const radarLabels = data.labels || [];
+    const radarDS = data.radar_datasets || [];
+    chartInstances['lenderRadarChart'] = new Chart(document.getElementById('lenderRadarChart'), {{ type:'radar', data:{{ labels:radarLabels, datasets:radarDS }}, options:{{ responsive:true, plugins:{{legend:{{position:'bottom',labels:{{boxWidth:12}}}}}}, scales:{{ r:{{beginAtZero:true, grid:{{color:'#21262d'}}, angleLines:{{color:'#21262d'}}, pointLabels:{{font:{{size:10}},color:'#c9d1d9'}}}} }} }} }});
+    const s = data.scores;
+    const lLabels = data.labels;
+    const lScoreCanvas = document.getElementById('lenderChart');
+    const lScoreWrap = lScoreCanvas && lScoreCanvas.closest('.lender-score-chart-wrap');
+    if (lScoreWrap) lScoreWrap.style.height = Math.max(320, lLabels.length * 28) + 'px';
+    chartInstances['lenderChart'] = new Chart(lScoreCanvas, {{ type:'bar', data:{{ labels:lLabels, datasets:[{{ label:'Terms Power Score', data:s, backgroundColor:s.map(v=>v>50?'#00d4aa':v>30?'#FFD93D':'#FF6B6B'), borderRadius:4 }}] }}, options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{{legend:{{display:false}}}}, scales:{{ x:{{min:0,max:100,grid:{{color:'#21262d'}}}}, y:{{grid:{{display:false}}, ticks:{{autoSkip:false, maxRotation:0}}}} }} }} }});
+    buildHeatmap('lenderHeatmap', 'lender', data.heatmap_entities, data.heatmap_topics, data.heatmap_data, data.heatmap_topic_polarities);
+  }}
+  if (layer === 'borrower') {{
+    const radarLabels = data.labels || [];
+    const radarDS = data.radar_datasets || [];
+    chartInstances['borrowerChart'] = new Chart(document.getElementById('borrowerChart'), {{ type:'radar', data:{{ labels:radarLabels, datasets:radarDS }}, options:{{ responsive:true, plugins:{{legend:{{position:'bottom',labels:{{boxWidth:12}}}}}}, scales:{{ r:{{beginAtZero:true, grid:{{color:'#21262d'}}, angleLines:{{color:'#21262d'}}, pointLabels:{{font:{{size:10}},color:'#c9d1d9'}}}} }} }} }});
+    const bScores = data.scores;
+    const bLabels = data.labels;
+    const bScoreCanvas = document.getElementById('borrowerScoreChart');
+    const bScoreWrap = bScoreCanvas && bScoreCanvas.closest('.borrower-score-chart-wrap');
+    if (bScoreWrap) bScoreWrap.style.height = Math.max(320, bLabels.length * 28) + 'px';
+    chartInstances['borrowerScoreChart'] = new Chart(bScoreCanvas, {{ type:'bar', data:{{ labels:bLabels, datasets:[{{ label:'Stress Score', data:bScores, backgroundColor:bScores.map(v=>v>=70?'#FF6B6B':v>=50?'#FFD93D':'#00d4aa'), borderRadius:4 }}] }}, options:{{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{{legend:{{display:false}}}}, scales:{{ x:{{min:0,max:100,grid:{{color:'#21262d'}}}}, y:{{grid:{{display:false}}, ticks:{{autoSkip:false, maxRotation:0}}}} }} }} }});
+    buildHeatmap('borrowerHeatmap', 'borrower', data.heatmap_entities, data.heatmap_topics, data.heatmap_data, data.heatmap_topic_polarities);
+  }}
+  chartsInitialized[layer] = true;
+  initAudit(layer);
+
+  /* Show reset button, hide customize */
+  document.getElementById('btnResetCustom').style.display = 'inline-block';
+}}
+
+function resetToDefault() {{
+  const layer = document.querySelector('.nav-item.active')?.getAttribute('data-layer');
+  if (!layer || !isCustom[layer]) return;
+  const data = defaultLayerData[layer];
+  if (!data) return;
+  isCustom[layer] = false;
+  auditData[layer] = data.audit_docs || [];
+  auditsInitialized[layer] = false;
+  destroyCharts(layer);
+  chartsInitialized[layer] = false;
+  pageBadges[layer] = data.entity_count + ' entities &middot; ' + data.topic_count + ' topics';
+  document.getElementById('pageBadge').innerHTML = pageBadges[layer];
+  initCharts(layer);
+  initAudit(layer);
+  document.getElementById('btnResetCustom').style.display = 'none';
+}}
+
+/* ── Extend switchLayer to show/hide customize button ── */
+const _origSwitchLayer = switchLayer;
+switchLayer = function(layer) {{
+  _origSwitchLayer(layer);
+  const btn = document.getElementById('btnCustomize');
+  const rst = document.getElementById('btnResetCustom');
+  if (layer === 'overview') {{
+    btn.style.display = 'none';
+    rst.style.display = 'none';
+  }} else {{
+    btn.style.display = 'inline-block';
+    rst.style.display = isCustom[layer] ? 'inline-block' : 'none';
+  }}
+}};
 
 </script>
 </body>

@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from dotenv import load_dotenv
 from rich.table import Table
@@ -39,7 +39,9 @@ SEARCH_END_DATE = datetime(2026, 3, 30)  # end of current year; no future dates
 SEARCH_DATE_LABEL = "Jan 1, 2025 – Mar 30, 2026"
 
 
-def _get_bigdata_client() -> Bigdata:
+def _get_bigdata_client(api_key: str | None = None) -> Bigdata:
+    if api_key:
+        return Bigdata(api_key=api_key)
     load_dotenv()
     return Bigdata()
 
@@ -48,6 +50,7 @@ def _build_jobs(
     entities: list[EntityDict],
     topics: list[TopicDict],
     skip_cached: bool = True,
+    cache_dir: Path | None = None,
 ) -> list[tuple[EntityDict, TopicDict]]:
     """Build (entity, topic) pairs, filtering by applies_to and optionally skipping cached."""
     jobs: list[tuple[EntityDict, TopicDict]] = []
@@ -58,7 +61,7 @@ def _build_jobs(
                 continue
 
             if skip_cached:
-                filename = _result_path(entity, topic)
+                filename = _result_path(entity, topic, cache_dir=cache_dir)
                 if filename.exists():
                     continue
 
@@ -66,10 +69,13 @@ def _build_jobs(
     return jobs
 
 
-def _result_path(entity: EntityDict, topic: TopicDict) -> Path:
+def _result_path(
+    entity: EntityDict, topic: TopicDict, cache_dir: Path | None = None,
+) -> Path:
     entity_slug = sanitize_filename(str(entity["name"]))
     topic_slug = sanitize_filename(str(topic["topic_name"]))
-    return RAW_OUTPUT_DIR / f"{entity_slug}_{topic_slug}.json"
+    base = cache_dir if cache_dir is not None else RAW_OUTPUT_DIR
+    return base / f"{entity_slug}_{topic_slug}.json"
 
 
 def _sentiment_filter_for_topic_polarity(polarity: str) -> SentimentRange | None:
@@ -108,6 +114,7 @@ def _run_single_search(
     bigdata: Bigdata,
     entity: EntityDict,
     topic: TopicDict,
+    cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Execute a single (entity, topic) search with query reformulation; save merged result."""
     query_text = str(topic["topic_text"]).replace("{company}", str(entity["name"]))
@@ -115,7 +122,6 @@ def _run_single_search(
     query_variants = _reformulate_queries(str(topic["topic_text"]), entity_name)
     start_ms = time.time() * 1000
 
-    # Run all query variants in one batch (same date range); merge and dedupe by content hash
     sentiment_q = _sentiment_filter_for_topic_polarity(str(topic["polarity"]))
     queries = [
         (Similarity(q) & sentiment_q) if sentiment_q is not None else Similarity(q)
@@ -136,7 +142,7 @@ def _run_single_search(
     for batch in search_results:
         for doc in batch:
             content = "".join(chunk.text for chunk in doc.chunks)
-            key = (doc.headline or "") + "|" + (doc.url or "")  # dedupe by headline+url
+            key = (doc.headline or "") + "|" + (doc.url or "")
             if key in seen:
                 continue
             seen.add(key)
@@ -146,7 +152,6 @@ def _run_single_search(
                 "timestamp": str(doc.timestamp) if doc.timestamp else None,
                 "url": doc.url if hasattr(doc, "url") else None,
             })
-    # Cap total merged results at 50 so we don't bloat cache
     results_list = results_list[:50]
 
     result_payload: dict[str, Any] = {
@@ -161,7 +166,7 @@ def _run_single_search(
         "results": results_list,
     }
 
-    output_path = _result_path(entity, topic)
+    output_path = _result_path(entity, topic, cache_dir=cache_dir)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result_payload, indent=2, default=str))
 
@@ -179,7 +184,10 @@ def run_all_searches(
     entities: list[EntityDict] | None = None,
     layer_filter: str | None = None,
     entity_filter: str | None = None,
-    max_workers: int = 5,
+    max_workers: int = 10,
+    api_key: str | None = None,
+    cache_dir: Path | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, int]:
     """Run all (entity x topic) searches in parallel.
 
@@ -193,8 +201,8 @@ def run_all_searches(
     if entity_filter:
         target_entities = [e for e in target_entities if e["name"] == entity_filter]
 
-    all_possible = _build_jobs(target_entities, TOPICS, skip_cached=False)
-    jobs = _build_jobs(target_entities, TOPICS, skip_cached=True)
+    all_possible = _build_jobs(target_entities, TOPICS, skip_cached=False, cache_dir=cache_dir)
+    jobs = _build_jobs(target_entities, TOPICS, skip_cached=True, cache_dir=cache_dir)
 
     skipped = len(all_possible) - len(jobs)
     success = 0
@@ -209,12 +217,13 @@ def run_all_searches(
         console.print("[green]All results cached. Skipping search phase.[/green]")
         return {"total": len(all_possible), "success": 0, "skipped": skipped, "failed": 0}
 
-    bigdata = _get_bigdata_client()
+    bigdata = _get_bigdata_client(api_key=api_key)
 
-    # Parallel search: run (entity × topic) jobs concurrently with ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(_run_single_search, bigdata, entity, topic): (entity, topic)
+            executor.submit(
+                _run_single_search, bigdata, entity, topic, cache_dir,
+            ): (entity, topic)
             for entity, topic in jobs
         }
 
@@ -223,6 +232,10 @@ def run_all_searches(
             try:
                 future.result()
                 success += 1
+                if progress_callback:
+                    progress_callback(
+                        f"Searched {success + failed}/{len(jobs)}: {entity['name']} × {topic['topic_name']}"
+                    )
             except Exception as exc:
                 failed += 1
                 logger.error(
